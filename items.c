@@ -512,14 +512,21 @@ int do_item_link(item *it, const uint32_t hv) {
     assert((it->it_flags & (ITEM_LINKED|ITEM_SLABBED)) == 0);
 #ifdef PSLAB
     if (it->it_flags & ITEM_PSLAB) {
-        if ((it->it_flags & ITEM_CHUNKED) == 0)
+        if ((it->it_flags & ITEM_CHUNKED) == 0) {
             pslab_item_data_flush(it);
-        pmem_drain();
+            pmem_drain();
+        }
+            
+        if (it->it_flags & ITEM_LINKED) {
+            it->it_flags |= ITEM_LINKED;
+            pmem_member_persist(it, it_flags);
+        }
+        
+        if (it->time != current_time) {
+            it->time = current_time;
+            pmem_member_persist(it, time);
+        }
 
-        it->it_flags |= ITEM_LINKED;
-        pmem_member_persist(it, it_flags);
-        it->time = current_time;
-        pmem_member_persist(it, time);
     } else {
 #endif
         it->it_flags |= ITEM_LINKED;
