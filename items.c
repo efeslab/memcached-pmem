@@ -518,8 +518,9 @@ int do_item_link(item *it, const uint32_t hv) {
         }
         
         if ((it->it_flags & ITEM_LINKED) == 0) {
-            it->it_flags |= ITEM_LINKED;
-            pmem_member_persist(it, it_flags);
+            it->it_flags = it->it_flags | ITEM_LINKED;
+            // pmem_member_persist(it, it_flags);
+            pmem_persist(&(it->it_flags), sizeof(it->it_flags));
         }
         
         if (it->time != current_time) {
