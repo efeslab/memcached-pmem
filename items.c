@@ -524,7 +524,8 @@ int do_item_link(item *it, const uint32_t hv) {
         
         if (it->time != current_time) {
             it->time = current_time;
-            pmem_member_persist(it, time);
+            pmem_persist(&(it->time), sizeof(it->time));
+            // pmem_member_persist(it, time);
         }
 
     } else {
