@@ -517,7 +517,7 @@ int do_item_link(item *it, const uint32_t hv) {
             pmem_drain();
         }
             
-        if (it->it_flags & ITEM_LINKED) {
+        if ((it->it_flags & ITEM_LINKED) == 0) {
             it->it_flags |= ITEM_LINKED;
             pmem_member_persist(it, it_flags);
         }
