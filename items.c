@@ -513,10 +513,10 @@ int do_item_link(item *it, const uint32_t hv) {
 #ifdef PSLAB
     if (it->it_flags & ITEM_PSLAB) {
         if ((it->it_flags & ITEM_CHUNKED) == 0) {
-            pslab_item_data_flush(it);
-            pmem_drain();
+            // pslab_item_data_flush(it);
+            // pmem_drain();
         }
-            
+        
         if ((it->it_flags & ITEM_LINKED) == 0) {
             it->it_flags |= ITEM_LINKED;
             pmem_member_persist(it, it_flags);
@@ -524,8 +524,7 @@ int do_item_link(item *it, const uint32_t hv) {
         
         if (it->time != current_time) {
             it->time = current_time;
-            pmem_persist(&(it->time), sizeof(it->time));
-            // pmem_member_persist(it, time);
+            pmem_member_persist(it, time);
         }
 
     } else {
