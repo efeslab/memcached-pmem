@@ -480,6 +480,18 @@ extern struct settings settings;
 #endif
 
 /**
+ * iangneal: volatile use
+ * 
+ * Rather than iterating through the item's next/prev, you grab this struct,
+ * do it, then return the item
+ */
+typedef struct _volitem {
+    struct _volitem *next;
+    struct _volitem *prev;
+    void *ptr;
+} volitem;
+
+/**
  * Structure for storing items within memcached.
  */
 typedef struct _stritem {
