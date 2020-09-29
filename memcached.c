@@ -682,14 +682,14 @@ static void recache_or_free(conn *c, io_wrap *wrap) {
             item *h_it = wrap->hdr_it;
             uint8_t flags = ITEM_LINKED|ITEM_FETCHED|ITEM_ACTIVE;
             // Item must be recently hit at least twice to recache.
-            if (((h_it->it_flags & flags) == flags) &&
+            if (((h_it->pm->it_flags & flags) == flags) &&
                     h_it->time > current_time - ITEM_UPDATE_INTERVAL &&
                     c->recache_counter++ % settings.ext_recache_rate == 0) {
                 do_free = false;
                 // In case it's been updated.
-                it->exptime = h_it->exptime;
-                it->it_flags &= ~ITEM_LINKED;
-                it->refcount = 0;
+                it->pm->exptime = h_it->pm->exptime;
+                it->pm->it_flags &= ~ITEM_LINKED;
+                it->pm->refcount = 0;
                 it->h_next = NULL; // might not be necessary.
                 STORAGE_delete(c->thread->storage, h_it);
                 item_replace(h_it, it, hv);
@@ -723,7 +723,7 @@ static void conn_release_items(conn *c) {
 
     while (c->ileft > 0) {
         item *it = *(c->icurr);
-        assert((it->it_flags & ITEM_SLABBED) == 0);
+        assert((it->pm->it_flags & ITEM_SLABBED) == 0);
         item_remove(it);
         c->icurr++;
         c->ileft--;
@@ -1033,7 +1033,7 @@ static int add_iov(conn *c, const void *buf, int len) {
 }
 
 static int add_chunked_item_iovs(conn *c, item *it, int len) {
-    assert(it->it_flags & ITEM_CHUNKED);
+    assert(it->pm->it_flags & ITEM_CHUNKED);
     item_chunk *ch = (item_chunk *) ITEM_data(it);
     while (ch) {
         int todo = (len > ch->used) ? ch->used : len;
@@ -1166,8 +1166,8 @@ static void complete_nread_ascii(conn *c) {
     c->thread->stats.slab_stats[ITEM_clsid(it)].set_cmds++;
     pthread_mutex_unlock(&c->thread->stats.mutex);
 
-    if ((it->it_flags & ITEM_CHUNKED) == 0) {
-        if (strncmp(ITEM_data(it) + it->nbytes - 2, "\r\n", 2) == 0) {
+    if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
+        if (strncmp(ITEM_data(it) + it->pm->nbytes - 2, "\r\n", 2) == 0) {
             is_valid = true;
         }
     } else {
@@ -1203,27 +1203,27 @@ static void complete_nread_ascii(conn *c) {
       uint64_t cas = ITEM_get_cas(it);
       switch (c->cmd) {
       case NREAD_ADD:
-          MEMCACHED_COMMAND_ADD(c->sfd, ITEM_key(it), it->nkey,
-                                (ret == 1) ? it->nbytes : -1, cas);
+          MEMCACHED_COMMAND_ADD(c->sfd, ITEM_key(it), it->pm->nkey,
+                                (ret == 1) ? it->pm->nbytes : -1, cas);
           break;
       case NREAD_REPLACE:
-          MEMCACHED_COMMAND_REPLACE(c->sfd, ITEM_key(it), it->nkey,
-                                    (ret == 1) ? it->nbytes : -1, cas);
+          MEMCACHED_COMMAND_REPLACE(c->sfd, ITEM_key(it), it->pm->nkey,
+                                    (ret == 1) ? it->pm->nbytes : -1, cas);
           break;
       case NREAD_APPEND:
-          MEMCACHED_COMMAND_APPEND(c->sfd, ITEM_key(it), it->nkey,
-                                   (ret == 1) ? it->nbytes : -1, cas);
+          MEMCACHED_COMMAND_APPEND(c->sfd, ITEM_key(it), it->pm->nkey,
+                                   (ret == 1) ? it->pm->nbytes : -1, cas);
           break;
       case NREAD_PREPEND:
-          MEMCACHED_COMMAND_PREPEND(c->sfd, ITEM_key(it), it->nkey,
-                                    (ret == 1) ? it->nbytes : -1, cas);
+          MEMCACHED_COMMAND_PREPEND(c->sfd, ITEM_key(it), it->pm->nkey,
+                                    (ret == 1) ? it->pm->nbytes : -1, cas);
           break;
       case NREAD_SET:
-          MEMCACHED_COMMAND_SET(c->sfd, ITEM_key(it), it->nkey,
-                                (ret == 1) ? it->nbytes : -1, cas);
+          MEMCACHED_COMMAND_SET(c->sfd, ITEM_key(it), it->pm->nkey,
+                                (ret == 1) ? it->pm->nbytes : -1, cas);
           break;
       case NREAD_CAS:
-          MEMCACHED_COMMAND_CAS(c->sfd, ITEM_key(it), it->nkey, it->nbytes,
+          MEMCACHED_COMMAND_CAS(c->sfd, ITEM_key(it), it->pm->nkey, it->pm->nbytes,
                                 cas);
           break;
       }
@@ -1506,12 +1506,12 @@ static void complete_update_bin(conn *c) {
 
     /* We don't actually receive the trailing two characters in the bin
      * protocol, so we're going to just set them here */
-    if ((it->it_flags & ITEM_CHUNKED) == 0) {
-        *(ITEM_data(it) + it->nbytes - 2) = '\r';
-        *(ITEM_data(it) + it->nbytes - 1) = '\n';
+    if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
+        *(ITEM_data(it) + it->pm->nbytes - 2) = '\r';
+        *(ITEM_data(it) + it->pm->nbytes - 1) = '\n';
 #ifdef PSLAB
-        if (it->it_flags & ITEM_PSLAB)
-            pmem_flush(ITEM_data(it) + it->nbytes - 2, 2);
+        if (it->pm->it_flags & ITEM_PSLAB)
+            pmem_flush(ITEM_data(it) + it->pm->nbytes - 2, 2);
 #endif
     } else {
         assert(c->ritem);
@@ -1522,7 +1522,7 @@ static void complete_update_bin(conn *c) {
         ch->data[ch->used] = '\r';
         ch->data[ch->used + 1] = '\n';
 #ifdef PSLAB
-        if (it->it_flags & ITEM_PSLAB)
+        if (it->pm->it_flags & ITEM_PSLAB)
             pmem_flush(&ch->data[ch->used], 2);
 #endif
         ch->used += 2;
@@ -1534,24 +1534,24 @@ static void complete_update_bin(conn *c) {
     uint64_t cas = ITEM_get_cas(it);
     switch (c->cmd) {
     case NREAD_ADD:
-        MEMCACHED_COMMAND_ADD(c->sfd, ITEM_key(it), it->nkey,
-                              (ret == STORED) ? it->nbytes : -1, cas);
+        MEMCACHED_COMMAND_ADD(c->sfd, ITEM_key(it), it->pm->nkey,
+                              (ret == STORED) ? it->pm->nbytes : -1, cas);
         break;
     case NREAD_REPLACE:
-        MEMCACHED_COMMAND_REPLACE(c->sfd, ITEM_key(it), it->nkey,
-                                  (ret == STORED) ? it->nbytes : -1, cas);
+        MEMCACHED_COMMAND_REPLACE(c->sfd, ITEM_key(it), it->pm->nkey,
+                                  (ret == STORED) ? it->pm->nbytes : -1, cas);
         break;
     case NREAD_APPEND:
-        MEMCACHED_COMMAND_APPEND(c->sfd, ITEM_key(it), it->nkey,
-                                 (ret == STORED) ? it->nbytes : -1, cas);
+        MEMCACHED_COMMAND_APPEND(c->sfd, ITEM_key(it), it->pm->nkey,
+                                 (ret == STORED) ? it->pm->nbytes : -1, cas);
         break;
     case NREAD_PREPEND:
-        MEMCACHED_COMMAND_PREPEND(c->sfd, ITEM_key(it), it->nkey,
-                                 (ret == STORED) ? it->nbytes : -1, cas);
+        MEMCACHED_COMMAND_PREPEND(c->sfd, ITEM_key(it), it->pm->nkey,
+                                 (ret == STORED) ? it->pm->nbytes : -1, cas);
         break;
     case NREAD_SET:
-        MEMCACHED_COMMAND_SET(c->sfd, ITEM_key(it), it->nkey,
-                              (ret == STORED) ? it->nbytes : -1, cas);
+        MEMCACHED_COMMAND_SET(c->sfd, ITEM_key(it), it->pm->nkey,
+                              (ret == STORED) ? it->pm->nbytes : -1, cas);
         break;
     }
 #endif
@@ -1631,7 +1631,7 @@ static void process_bin_get_or_touch(conn *c) {
     if (it) {
         /* the length has two unnecessary bytes ("\r\n") */
         uint16_t keylen = 0;
-        uint32_t bodylen = sizeof(rsp->message.body) + (it->nbytes - 2);
+        uint32_t bodylen = sizeof(rsp->message.body) + (it->pm->nbytes - 2);
 
         pthread_mutex_lock(&c->thread->stats.mutex);
         if (should_touch) {
@@ -1639,20 +1639,20 @@ static void process_bin_get_or_touch(conn *c) {
             c->thread->stats.slab_stats[ITEM_clsid(it)].touch_hits++;
         } else {
             c->thread->stats.get_cmds++;
-            c->thread->stats.lru_hits[it->slabs_clsid]++;
+            c->thread->stats.lru_hits[it->pm->slabs_clsid]++;
         }
         pthread_mutex_unlock(&c->thread->stats.mutex);
 
         if (should_touch) {
-            MEMCACHED_COMMAND_TOUCH(c->sfd, ITEM_key(it), it->nkey,
-                                    it->nbytes, ITEM_get_cas(it));
+            MEMCACHED_COMMAND_TOUCH(c->sfd, ITEM_key(it), it->pm->nkey,
+                                    it->pm->nbytes, ITEM_get_cas(it));
         } else {
-            MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->nkey,
-                                  it->nbytes, ITEM_get_cas(it));
+            MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->pm->nkey,
+                                  it->pm->nbytes, ITEM_get_cas(it));
         }
 
         if (c->cmd == PROTOCOL_BINARY_CMD_TOUCH) {
-            bodylen -= it->nbytes - 2;
+            bodylen -= it->pm->nbytes - 2;
         } else if (should_return_key) {
             bodylen += nkey;
             keylen = nkey;
@@ -1664,7 +1664,7 @@ static void process_bin_get_or_touch(conn *c) {
         // add the flags
         if (settings.inline_ascii_response) {
             rsp->message.body.flags = htonl(strtoul(ITEM_suffix(it), NULL, 10));
-        } else if (it->nsuffix > 0) {
+        } else if (it->pm->nsuffix > 0) {
             rsp->message.body.flags = htonl(*((uint32_t *)ITEM_suffix(it)));
         } else {
             rsp->message.body.flags = 0;
@@ -1678,7 +1678,7 @@ static void process_bin_get_or_touch(conn *c) {
         if (should_return_value) {
             /* Add the data minus the CRLF */
 #ifdef EXTSTORE
-            if (it->it_flags & ITEM_HDR) {
+            if (it->pm->it_flags & ITEM_HDR) {
                 int iovcnt = 4;
                 int iovst = c->iovused - 3;
                 if (!should_return_key) {
@@ -1689,16 +1689,16 @@ static void process_bin_get_or_touch(conn *c) {
                 // allow bailing here.
                 if (_get_extstore(c, it, iovst, iovcnt) != 0)
                     failed = true;
-            } else if ((it->it_flags & ITEM_CHUNKED) == 0) {
-                add_iov(c, ITEM_data(it), it->nbytes - 2);
+            } else if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
+                add_iov(c, ITEM_data(it), it->pm->nbytes - 2);
             } else {
-                add_chunked_item_iovs(c, it, it->nbytes - 2);
+                add_chunked_item_iovs(c, it, it->pm->nbytes - 2);
             }
 #else
-            if ((it->it_flags & ITEM_CHUNKED) == 0) {
-                add_iov(c, ITEM_data(it), it->nbytes - 2);
+            if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
+                add_iov(c, ITEM_data(it), it->pm->nbytes - 2);
             } else {
-                add_chunked_item_iovs(c, it, it->nbytes - 2);
+                add_chunked_item_iovs(c, it, it->pm->nbytes - 2);
             }
 #endif
         }
@@ -1708,7 +1708,7 @@ static void process_bin_get_or_touch(conn *c) {
             c->write_and_go = conn_new_cmd;
             /* Remember this command so we can garbage collect it later */
 #ifdef EXTSTORE
-            if ((it->it_flags & ITEM_HDR) == 0) {
+            if ((it->pm->it_flags & ITEM_HDR) == 0) {
                 c->item = it;
             } else {
                 c->item = NULL;
@@ -2073,7 +2073,7 @@ static void process_bin_sasl_auth(conn *c) {
     item *it = item_alloc(key, nkey, 0, 0, vlen+2);
 
     /* Can't use a chunked item for SASL authentication. */
-    if (it == 0 || (it->it_flags & ITEM_CHUNKED)) {
+    if (it == 0 || (it->pm->it_flags & ITEM_CHUNKED)) {
         write_bin_error(c, PROTOCOL_BINARY_RESPONSE_ENOMEM, NULL, vlen);
         c->write_and_go = conn_swallow;
         return;
@@ -2097,7 +2097,7 @@ static void process_bin_complete_sasl_auth(conn *c) {
     int nkey = c->binary_header.request.keylen;
     int vlen = c->binary_header.request.bodylen - nkey;
 
-    if (nkey > ((item*) c->item)->nkey) {
+    if (nkey > ((item*) c->item)->pm->nkey) {
         write_bin_error(c, PROTOCOL_BINARY_RESPONSE_EINVAL, NULL, vlen);
         c->write_and_go = conn_swallow;
         item_unlink(c->item);
@@ -2113,7 +2113,7 @@ static void process_bin_complete_sasl_auth(conn *c) {
 
     const char *challenge = vlen == 0 ? NULL : ITEM_data((item*) c->item);
 
-    if (vlen > ((item*) c->item)->nbytes) {
+    if (vlen > ((item*) c->item)->pm->nbytes) {
         write_bin_error(c, PROTOCOL_BINARY_RESPONSE_EINVAL, NULL, vlen);
         c->write_and_go = conn_swallow;
         item_unlink(c->item);
@@ -2613,7 +2613,7 @@ static void process_bin_delete(conn *c) {
     if (it) {
         uint64_t cas = ntohll(req->message.header.request.cas);
         if (cas == 0 || cas == ITEM_get_cas(it)) {
-            MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->nkey);
+            MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->pm->nkey);
             pthread_mutex_lock(&c->thread->stats.mutex);
             c->thread->stats.slab_stats[ITEM_clsid(it)].delete_hits++;
             pthread_mutex_unlock(&c->thread->stats.mutex);
@@ -2708,7 +2708,7 @@ static void complete_nread(conn *c) {
 static int _store_item_copy_chunks(item *d_it, item *s_it, const int len) {
     item_chunk *dch = (item_chunk *) ITEM_data(d_it);
 #ifdef PSLAB
-    int is_pslab = (d_it->it_flags & ITEM_PSLAB) ? 1 : 0;
+    int is_pslab = (d_it->pm->it_flags & ITEM_PSLAB) ? 1 : 0;
 #endif
     /* Advance dch until we find free space */
     while (dch->size == dch->used) {
@@ -2719,7 +2719,7 @@ static int _store_item_copy_chunks(item *d_it, item *s_it, const int len) {
         }
     }
 
-    if (s_it->it_flags & ITEM_CHUNKED) {
+    if (s_it->pm->it_flags & ITEM_CHUNKED) {
         int remain = len;
         item_chunk *sch = (item_chunk *) ITEM_data(s_it);
         int copied = 0;
@@ -2794,39 +2794,39 @@ static int _store_item_copy_chunks(item *d_it, item *s_it, const int len) {
 
 static int _store_item_copy_data(int comm, item *old_it, item *new_it, item *add_it) {
     if (comm == NREAD_APPEND) {
-        if (new_it->it_flags & ITEM_CHUNKED) {
-            if (_store_item_copy_chunks(new_it, old_it, old_it->nbytes - 2) == -1 ||
-                _store_item_copy_chunks(new_it, add_it, add_it->nbytes) == -1) {
+        if (new_it->pm->it_flags & ITEM_CHUNKED) {
+            if (_store_item_copy_chunks(new_it, old_it, old_it->pm->nbytes - 2) == -1 ||
+                _store_item_copy_chunks(new_it, add_it, add_it->pm->nbytes) == -1) {
                 return -1;
             }
         } else {
 #ifdef PSLAB
-            if (new_it->it_flags & ITEM_PSLAB) {
-                pmem_memcpy_nodrain(ITEM_data(new_it), ITEM_data(old_it), old_it->nbytes);
-                pmem_memcpy_nodrain(ITEM_data(new_it) + old_it->nbytes - 2 /* CRLF */, ITEM_data(add_it), add_it->nbytes);
+            if (new_it->pm->it_flags & ITEM_PSLAB) {
+                pmem_memcpy_nodrain(ITEM_data(new_it), ITEM_data(old_it), old_it->pm->nbytes);
+                pmem_memcpy_nodrain(ITEM_data(new_it) + old_it->pm->nbytes - 2 /* CRLF */, ITEM_data(add_it), add_it->pm->nbytes);
                 return 0;
             }
 #endif
-            memcpy(ITEM_data(new_it), ITEM_data(old_it), old_it->nbytes);
-            memcpy(ITEM_data(new_it) + old_it->nbytes - 2 /* CRLF */, ITEM_data(add_it), add_it->nbytes);
+            memcpy(ITEM_data(new_it), ITEM_data(old_it), old_it->pm->nbytes);
+            memcpy(ITEM_data(new_it) + old_it->pm->nbytes - 2 /* CRLF */, ITEM_data(add_it), add_it->pm->nbytes);
         }
     } else {
         /* NREAD_PREPEND */
-        if (new_it->it_flags & ITEM_CHUNKED) {
-            if (_store_item_copy_chunks(new_it, add_it, add_it->nbytes - 2) == -1 ||
-                _store_item_copy_chunks(new_it, old_it, old_it->nbytes) == -1) {
+        if (new_it->pm->it_flags & ITEM_CHUNKED) {
+            if (_store_item_copy_chunks(new_it, add_it, add_it->pm->nbytes - 2) == -1 ||
+                _store_item_copy_chunks(new_it, old_it, old_it->pm->nbytes) == -1) {
                 return -1;
             }
         } else {
 #ifdef PSLAB
-            if (new_it->it_flags & ITEM_PSLAB) {
-                pmem_memcpy_nodrain(ITEM_data(new_it), ITEM_data(add_it), add_it->nbytes);
-                pmem_memcpy_nodrain(ITEM_data(new_it) + add_it->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->nbytes);
+            if (new_it->pm->it_flags & ITEM_PSLAB) {
+                pmem_memcpy_nodrain(ITEM_data(new_it), ITEM_data(add_it), add_it->pm->nbytes);
+                pmem_memcpy_nodrain(ITEM_data(new_it) + add_it->pm->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->pm->nbytes);
                 return 0;
             }
 #endif
-            memcpy(ITEM_data(new_it), ITEM_data(add_it), add_it->nbytes);
-            memcpy(ITEM_data(new_it) + add_it->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->nbytes);
+            memcpy(ITEM_data(new_it), ITEM_data(add_it), add_it->pm->nbytes);
+            memcpy(ITEM_data(new_it) + add_it->pm->nbytes - 2 /* CRLF */, ITEM_data(old_it), old_it->pm->nbytes);
         }
     }
     return 0;
@@ -2840,7 +2840,7 @@ static int _store_item_copy_data(int comm, item *old_it, item *new_it, item *add
  */
 enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t hv) {
     char *key = ITEM_key(it);
-    item *old_it = do_item_get(key, it->nkey, hv, c, DONT_UPDATE);
+    item *old_it = do_item_get(key, it->pm->nkey, hv, c, DONT_UPDATE);
     enum store_item_type stored = NOT_STORED;
 
     item *new_it = NULL;
@@ -2902,7 +2902,7 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
                 }
             }
 #ifdef EXTSTORE
-            if ((old_it->it_flags & ITEM_HDR) != 0) {
+            if ((old_it->pm->it_flags & ITEM_HDR) != 0) {
                 /* block append/prepend from working with extstore-d items.
                  * also don't replace the header with the append chunk
                  * accidentally, so mark as a failed_alloc.
@@ -2916,13 +2916,13 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
 
                 if (settings.inline_ascii_response) {
                     flags = (uint32_t) strtoul(ITEM_suffix(old_it), (char **) NULL, 10);
-                } else if (old_it->nsuffix > 0) {
+                } else if (old_it->pm->nsuffix > 0) {
                     flags = *((uint32_t *)ITEM_suffix(old_it));
                 } else {
                     flags = 0;
                 }
 
-                new_it = do_item_alloc(key, it->nkey, flags, old_it->exptime, it->nbytes + old_it->nbytes - 2 /* CRLF */);
+                new_it = do_item_alloc(key, it->pm->nkey, flags, old_it->pm->exptime, it->pm->nbytes + old_it->pm->nbytes - 2 /* CRLF */);
 
                 /* copy data from it and old_it to new_it */
                 if (new_it == NULL || _store_item_copy_data(comm, old_it, new_it, it) == -1) {
@@ -2960,7 +2960,7 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
         c->cas = ITEM_get_cas(it);
     }
     LOGGER_LOG(c->thread->l, LOG_MUTATIONS, LOGGER_ITEM_STORE, NULL,
-            stored, comm, ITEM_key(it), it->nkey, it->exptime, ITEM_clsid(it));
+            stored, comm, ITEM_key(it), it->pm->nkey, it->pm->exptime, ITEM_clsid(it));
 
     return stored;
 }
@@ -3536,7 +3536,7 @@ static inline int make_ascii_get_suffix(char *suffix, item *it, bool return_cas,
     if (!settings.inline_ascii_response) {
         *p = ' ';
         p++;
-        if (it->nsuffix == 0) {
+        if (it->pm->nsuffix == 0) {
             *p = '0';
             p++;
         } else {
@@ -3565,7 +3565,7 @@ static inline item* limited_get(char *key, size_t nkey, conn *c, uint32_t exptim
     } else {
         it = item_get(key, nkey, c, DO_UPDATE);
     }
-    if (it && it->refcount > IT_REFCOUNT_LIMIT) {
+    if (it && it->pm->refcount > IT_REFCOUNT_LIMIT) {
         item_remove(it);
         it = NULL;
     }
@@ -3634,7 +3634,7 @@ static void _get_extstore_cb(void *e, obj_io *io, int ret) {
         miss = true;
     } else {
         uint32_t crc2;
-        uint32_t crc = (uint32_t) read_it->exptime;
+        uint32_t crc = (uint32_t) read_it->pm->exptime;
         int x;
         // item is chunked, crc the iov's
         if (io->iov != NULL) {
@@ -3664,7 +3664,7 @@ static void _get_extstore_cb(void *e, obj_io *io, int ret) {
                 (protocol_binary_response_header *)c->wbuf;
             // this zeroes out the iovecs since binprot never stacks them.
             if (header->response.keylen) {
-                write_bin_miss_response(c, ITEM_key(wrap->hdr_it), wrap->hdr_it->nkey);
+                write_bin_miss_response(c, ITEM_key(wrap->hdr_it), wrap->hdr_it->pm->nkey);
             } else {
                 write_bin_miss_response(c, 0, 0);
             }
@@ -3677,7 +3677,7 @@ static void _get_extstore_cb(void *e, obj_io *io, int ret) {
         }
         wrap->miss = true;
     } else {
-        assert(read_it->slabs_clsid != 0);
+        assert(read_it->pm->slabs_clsid != 0);
         // kill \r\n for binprot
         if (io->iov == NULL) {
             c->iov[wrap->iovec_data].iov_base = ITEM_data(read_it);
@@ -3724,14 +3724,14 @@ static inline int _get_extstore(conn *c, item *it, int iovst, int iovcnt) {
         uint32_t flags;
         if (settings.inline_ascii_response) {
             flags = (uint32_t) strtoul(ITEM_suffix(it), (char **) NULL, 10);
-        } else if (it->nsuffix > 0) {
+        } else if (it->pm->nsuffix > 0) {
             flags = *((uint32_t *)ITEM_suffix(it));
         } else {
             flags = 0;
         }
 
-        new_it = item_alloc(ITEM_key(it), it->nkey, flags, it->exptime, it->nbytes);
-        assert(new_it == NULL || (new_it->it_flags & ITEM_CHUNKED));
+        new_it = item_alloc(ITEM_key(it), it->pm->nkey, flags, it->pm->exptime, it->pm->nbytes);
+        assert(new_it == NULL || (new_it->pm->it_flags & ITEM_CHUNKED));
         chunked = true;
     } else {
         new_it = do_item_alloc_pull(ntotal, clsid);
@@ -3740,7 +3740,7 @@ static inline int _get_extstore(conn *c, item *it, int iovst, int iovcnt) {
         return -1;
     assert(!c->io_queued); // FIXME: debugging.
     // so we can free the chunk on a miss
-    new_it->slabs_clsid = clsid;
+    new_it->pm->slabs_clsid = clsid;
 
     io_wrap *io = do_cache_alloc(c->thread->io_cache);
     io->active = true;
@@ -3757,11 +3757,11 @@ static inline int _get_extstore(conn *c, item *it, int iovst, int iovcnt) {
     // object?
     if (chunked) {
         unsigned int ciovcnt = 1;
-        size_t remain = new_it->nbytes;
+        size_t remain = new_it->pm->nbytes;
         item_chunk *chunk = (item_chunk *) ITEM_data(new_it);
         io->io.iov = &c->iov[c->iovused];
         // fill the header so we can get the full data + crc back.
-        add_iov(c, new_it, ITEM_ntotal(new_it) - new_it->nbytes);
+        add_iov(c, new_it, ITEM_ntotal(new_it) - new_it->pm->nbytes);
         while (remain > 0) {
             chunk = do_item_alloc_chunk(chunk, remain);
             // TODO: counter bump
@@ -3781,7 +3781,7 @@ static inline int _get_extstore(conn *c, item *it, int iovst, int iovcnt) {
     } else {
         io->io.iov = NULL;
         io->iovec_data = c->iovused;
-        add_iov(c, "", it->nbytes);
+        add_iov(c, "", it->pm->nbytes);
     }
     io->io.buf = (void *)new_it;
     // The offset we'll fill in on a hit.
@@ -3881,8 +3881,8 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
 
                 if (return_cas || !settings.inline_ascii_response)
                 {
-                  MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->nkey,
-                                        it->nbytes, ITEM_get_cas(it));
+                  MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->pm->nkey,
+                                        it->pm->nbytes, ITEM_get_cas(it));
                   int nbytes;
                   suffix = _ascii_get_suffix_buf(c, si);
                   if (suffix == NULL) {
@@ -3890,51 +3890,51 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                       break;
                   }
                   si++;
-                  nbytes = it->nbytes;
+                  nbytes = it->pm->nbytes;
                   int suffix_len = make_ascii_get_suffix(suffix, it, return_cas, nbytes);
                   if (add_iov(c, "VALUE ", 6) != 0 ||
-                      add_iov(c, ITEM_key(it), it->nkey) != 0 ||
-                      (settings.inline_ascii_response && add_iov(c, ITEM_suffix(it), it->nsuffix - 2) != 0) ||
+                      add_iov(c, ITEM_key(it), it->pm->nkey) != 0 ||
+                      (settings.inline_ascii_response && add_iov(c, ITEM_suffix(it), it->pm->nsuffix - 2) != 0) ||
                       add_iov(c, suffix, suffix_len) != 0)
                       {
                           item_remove(it);
                           break;
                       }
 #ifdef EXTSTORE
-                  if (it->it_flags & ITEM_HDR) {
+                  if (it->pm->it_flags & ITEM_HDR) {
                       if (_get_extstore(c, it, c->iovused-3, 4) != 0) {
                           item_remove(it);
                           break;
                       }
-                  } else if ((it->it_flags & ITEM_CHUNKED) == 0) {
+                  } else if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
 #else
-                  if ((it->it_flags & ITEM_CHUNKED) == 0) {
+                  if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
 #endif
-                      add_iov(c, ITEM_data(it), it->nbytes);
-                  } else if (add_chunked_item_iovs(c, it, it->nbytes) != 0) {
+                      add_iov(c, ITEM_data(it), it->pm->nbytes);
+                  } else if (add_chunked_item_iovs(c, it, it->pm->nbytes) != 0) {
                       item_remove(it);
                       break;
                   }
                 }
                 else
                 {
-                  MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->nkey,
-                                        it->nbytes, ITEM_get_cas(it));
+                  MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->pm->nkey,
+                                        it->pm->nbytes, ITEM_get_cas(it));
                   if (add_iov(c, "VALUE ", 6) != 0 ||
-                      add_iov(c, ITEM_key(it), it->nkey) != 0)
+                      add_iov(c, ITEM_key(it), it->pm->nkey) != 0)
                       {
                           item_remove(it);
                           break;
                       }
-                  if ((it->it_flags & ITEM_CHUNKED) == 0)
+                  if ((it->pm->it_flags & ITEM_CHUNKED) == 0)
                       {
-                          if (add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0)
+                          if (add_iov(c, ITEM_suffix(it), it->pm->nsuffix + it->pm->nbytes) != 0)
                           {
                               item_remove(it);
                               break;
                           }
-                      } else if (add_iov(c, ITEM_suffix(it), it->nsuffix) != 0 ||
-                                 add_chunked_item_iovs(c, it, it->nbytes) != 0) {
+                      } else if (add_iov(c, ITEM_suffix(it), it->pm->nsuffix) != 0 ||
+                                 add_chunked_item_iovs(c, it, it->pm->nbytes) != 0) {
                           item_remove(it);
                           break;
                       }
@@ -3944,25 +3944,25 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                 if (settings.verbose > 1) {
                     int ii;
                     fprintf(stderr, ">%d sending key ", c->sfd);
-                    for (ii = 0; ii < it->nkey; ++ii) {
+                    for (ii = 0; ii < it->pm->nkey; ++ii) {
                         fprintf(stderr, "%c", key[ii]);
                     }
                     fprintf(stderr, "\n");
                 }
 
-                /* item_get() has incremented it->refcount for us */
+                /* item_get() has incremented it->pm->refcount for us */
                 pthread_mutex_lock(&c->thread->stats.mutex);
                 if (should_touch) {
                     c->thread->stats.touch_cmds++;
                     c->thread->stats.slab_stats[ITEM_clsid(it)].touch_hits++;
                 } else {
-                    c->thread->stats.lru_hits[it->slabs_clsid]++;
+                    c->thread->stats.lru_hits[it->pm->slabs_clsid]++;
                     c->thread->stats.get_cmds++;
                 }
                 pthread_mutex_unlock(&c->thread->stats.mutex);
 #ifdef EXTSTORE
                 /* If ITEM_HDR, an io_wrap owns the reference. */
-                if ((it->it_flags & ITEM_HDR) == 0) {
+                if ((it->pm->it_flags & ITEM_HDR) == 0) {
                     *(c->ilist + i) = it;
                     i++;
                 }
@@ -4112,7 +4112,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
     c->item = it;
     c->ritem = ITEM_data(it);
-    c->rlbytes = it->nbytes;
+    c->rlbytes = it->pm->nbytes;
     c->cmd = comm;
     conn_set_state(c, conn_nread);
 }
@@ -4236,9 +4236,9 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
     /* Can't delta zero byte values. 2-byte are the "\r\n" */
     /* Also can't delta for chunked items. Too large to be a number */
 #ifdef EXTSTORE
-    if (it->nbytes <= 2 || (it->it_flags & (ITEM_CHUNKED|ITEM_HDR)) != 0) {
+    if (it->pm->nbytes <= 2 || (it->pm->it_flags & (ITEM_CHUNKED|ITEM_HDR)) != 0) {
 #else
-    if (it->nbytes <= 2 || (it->it_flags & (ITEM_CHUNKED)) != 0) {
+    if (it->pm->nbytes <= 2 || (it->pm->it_flags & (ITEM_CHUNKED)) != 0) {
 #endif
         return NON_NUMERIC;
     }
@@ -4257,14 +4257,14 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
 
     if (incr) {
         value += delta;
-        MEMCACHED_COMMAND_INCR(c->sfd, ITEM_key(it), it->nkey, value);
+        MEMCACHED_COMMAND_INCR(c->sfd, ITEM_key(it), it->pm->nkey, value);
     } else {
         if(delta > value) {
             value = 0;
         } else {
             value -= delta;
         }
-        MEMCACHED_COMMAND_DECR(c->sfd, ITEM_key(it), it->nkey, value);
+        MEMCACHED_COMMAND_DECR(c->sfd, ITEM_key(it), it->pm->nkey, value);
     }
 
     pthread_mutex_lock(&c->thread->stats.mutex);
@@ -4280,7 +4280,7 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
     /* refcount == 2 means we are the only ones holding the item, and it is
      * linked. We hold the item's lock in this function, so refcount cannot
      * increase. */
-    if (res + 2 <= it->nbytes && it->refcount == 2) { /* replace in-place */
+    if (res + 2 <= it->pm->nbytes && it->pm->refcount == 2) { /* replace in-place */
         /* When changing the value without replacing the item, we
            need to update the CAS on the existing item. */
         /* We also need to fiddle it in the sizes tracker in case the tracking
@@ -4290,19 +4290,19 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
         ITEM_set_cas(it, (settings.use_cas) ? get_cas_id() : 0);
         item_stats_sizes_add(it);
         memcpy(ITEM_data(it), buf, res);
-        memset(ITEM_data(it) + res, ' ', it->nbytes - res - 2);
+        memset(ITEM_data(it) + res, ' ', it->pm->nbytes - res - 2);
         do_item_update(it);
-    } else if (it->refcount > 1) {
+    } else if (it->pm->refcount > 1) {
         item *new_it;
         uint32_t flags;
         if (settings.inline_ascii_response) {
             flags = (uint32_t) strtoul(ITEM_suffix(it), (char **) NULL, 10);
-        } else if (it->nsuffix > 0) {
+        } else if (it->pm->nsuffix > 0) {
             flags = *((uint32_t *)ITEM_suffix(it));
         } else {
             flags = 0;
         }
-        new_it = do_item_alloc(ITEM_key(it), it->nkey, flags, it->exptime, res + 2);
+        new_it = do_item_alloc(ITEM_key(it), it->pm->nkey, flags, it->pm->exptime, res + 2);
         if (new_it == 0) {
             do_item_remove(it);
             return EOM;
@@ -4320,7 +4320,7 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
         if (settings.verbose) {
             fprintf(stderr, "Tried to do incr/decr on invalid item\n");
         }
-        if (it->refcount == 1)
+        if (it->pm->refcount == 1)
             do_item_remove(it);
         return DELTA_ITEM_NOT_FOUND;
     }
@@ -4366,7 +4366,7 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
 
     it = item_get(key, nkey, c, DONT_UPDATE);
     if (it) {
-        MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->nkey);
+        MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->pm->nkey);
 
         pthread_mutex_lock(&c->thread->stats.mutex);
         c->thread->stats.slab_stats[ITEM_clsid(it)].delete_hits++;
@@ -5329,7 +5329,7 @@ static int read_into_chunked_item(conn *c) {
     int total = 0;
     int res;
 #ifdef PSLAB
-    int is_pslab = (((item *)c->item)->it_flags & ITEM_PSLAB) ? 1 : 0;
+    int is_pslab = (((item *)c->item)->pm->it_flags & ITEM_PSLAB) ? 1 : 0;
 #endif
     assert(c->rcurr != c->ritem);
 
@@ -5576,9 +5576,9 @@ static void drive_machine(conn *c) {
                 break;
             }
 
-            if (!c->item || (((item *)c->item)->it_flags & ITEM_CHUNKED) == 0) {
+            if (!c->item || (((item *)c->item)->pm->it_flags & ITEM_CHUNKED) == 0) {
 #ifdef PSLAB
-                int is_pslab = (c->item) && (((item *)c->item)->it_flags & ITEM_PSLAB) ? 1 : 0;
+                int is_pslab = (c->item) && (((item *)c->item)->pm->it_flags & ITEM_PSLAB) ? 1 : 0;
 #endif
 
                 /* first check if we have leftovers in the conn_read buffer */

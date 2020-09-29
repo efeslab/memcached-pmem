@@ -12,6 +12,14 @@
 #define	PSLAB_POLICY_PMEM 1
 #define	PSLAB_POLICY_BALANCED 2
 
+#define AGAMOTTO_PSLAB
+
+#ifdef AGAMOTTO_PSLAB
+void *vslab_to_pslab(void *ptr);
+#endif
+
+
+
 #define pmem_member_persist(p, m) \
     pmem_persist(&(p)->m, sizeof ((p)->m))
 #define pmem_member_flush(p, m) \

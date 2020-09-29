@@ -89,6 +89,7 @@ static int lru_crawler_client_getbuf(crawler_client_t *c);
 crawler_module_t active_crawler_mod;
 enum crawler_run_type active_crawler_type;
 
+static pmcrawler pmcrawlers[LARGEST_ID];
 static crawler crawlers[LARGEST_ID];
 
 static int crawler_count = 0;
@@ -185,49 +186,49 @@ static void crawler_expired_eval(crawler_module_t *cm, item *search, uint32_t hv
     int is_flushed = item_is_flushed(search);
 #ifdef EXTSTORE
     bool is_valid = true;
-    if (search->it_flags & ITEM_HDR) {
+    if (search->pm->it_flags & ITEM_HDR) {
         item_hdr *hdr = (item_hdr *)ITEM_data(search);
         if (extstore_check(storage, hdr->page_id, hdr->page_version) != 0)
             is_valid = false;
     }
 #endif
-    if ((search->exptime != 0 && search->exptime < current_time)
+    if ((search->pm->exptime != 0 && search->pm->exptime < current_time)
         || is_flushed
 #ifdef EXTSTORE
         || !is_valid
 #endif
         ) {
-        crawlers[i].reclaimed++;
+        crawlers[i].pm->reclaimed++;
         s->reclaimed++;
 
         if (settings.verbose > 1) {
             int ii;
             char *key = ITEM_key(search);
             fprintf(stderr, "LRU crawler found an expired item (flags: %d, slab: %d): ",
-                search->it_flags, search->slabs_clsid);
-            for (ii = 0; ii < search->nkey; ++ii) {
+                search->pm->it_flags, search->pm->slabs_clsid);
+            for (ii = 0; ii < search->pm->nkey; ++ii) {
                 fprintf(stderr, "%c", key[ii]);
             }
             fprintf(stderr, "\n");
         }
-        if ((search->it_flags & ITEM_FETCHED) == 0 && !is_flushed) {
-            crawlers[i].unfetched++;
+        if ((search->pm->it_flags & ITEM_FETCHED) == 0 && !is_flushed) {
+            crawlers[i].pm->unfetched++;
         }
 #ifdef EXTSTORE
         STORAGE_delete(storage, search);
 #endif
         do_item_unlink_nolock(search, hv);
         do_item_remove(search);
-        assert(search->slabs_clsid == 0);
+        assert(search->pm->slabs_clsid == 0);
     } else {
         s->seen++;
         refcount_decr(search);
-        if (search->exptime == 0) {
+        if (search->pm->exptime == 0) {
             s->noexp++;
-        } else if (search->exptime - current_time > 3599) {
+        } else if (search->pm->exptime - current_time > 3599) {
             s->ttl_hourplus++;
         } else {
-            rel_time_t ttl_remain = search->exptime - current_time;
+            rel_time_t ttl_remain = search->pm->exptime - current_time;
             int bucket = ttl_remain / 60;
             if (bucket <= 60) {
                 s->histo[bucket]++;
@@ -242,20 +243,20 @@ static void crawler_metadump_eval(crawler_module_t *cm, item *it, uint32_t hv, i
     char keybuf[KEY_MAX_LENGTH * 3 + 1];
     int is_flushed = item_is_flushed(it);
     /* Ignore expired content. */
-    if ((it->exptime != 0 && it->exptime < current_time)
+    if ((it->pm->exptime != 0 && it->pm->exptime < current_time)
         || is_flushed) {
         refcount_decr(it);
         return;
     }
     // TODO: uriencode directly into the buffer.
-    uriencode(ITEM_key(it), keybuf, it->nkey, KEY_MAX_LENGTH * 3 + 1);
+    uriencode(ITEM_key(it), keybuf, it->pm->nkey, KEY_MAX_LENGTH * 3 + 1);
     int total = snprintf(cm->c.cbuf, 4096,
             "key=%s exp=%ld la=%llu cas=%llu fetch=%s cls=%u size=%lu\n",
             keybuf,
-            (it->exptime == 0) ? -1 : (long)it->exptime + process_started,
-            (unsigned long long)it->time + process_started,
+            (it->pm->exptime == 0) ? -1 : (long)it->pm->exptime + process_started,
+            (unsigned long long)it->pm->time + process_started,
             (unsigned long long)ITEM_get_cas(it),
-            (it->it_flags & ITEM_FETCHED) ? "yes" : "no",
+            (it->pm->it_flags & ITEM_FETCHED) ? "yes" : "no",
             ITEM_clsid(it),
             (unsigned long) ITEM_ntotal(it));
     refcount_decr(it);
@@ -341,11 +342,11 @@ static int lru_crawler_client_getbuf(crawler_client_t *c) {
 }
 
 static void lru_crawler_class_done(int i) {
-    crawlers[i].it_flags = 0;
+    crawlers[i].pm->it_flags = 0;
     crawler_count--;
     do_item_unlinktail_q((item *)&crawlers[i]);
-    do_item_stats_add_crawl(i, crawlers[i].reclaimed,
-            crawlers[i].unfetched, crawlers[i].checked);
+    do_item_stats_add_crawl(i, crawlers[i].pm->reclaimed,
+            crawlers[i].pm->unfetched, crawlers[i].pm->checked);
     pthread_mutex_unlock(&lru_locks[i]);
     if (active_crawler_mod.mod->doneclass != NULL)
         active_crawler_mod.mod->doneclass(&active_crawler_mod, i);
@@ -368,7 +369,7 @@ static void *item_crawler_thread(void *arg) {
         void *hold_lock = NULL;
 
         for (i = POWER_SMALLEST; i < LARGEST_ID; i++) {
-            if (crawlers[i].it_flags != 1) {
+            if (crawlers[i].pm->it_flags != 1) {
                 continue;
             }
 
@@ -386,13 +387,13 @@ static void *item_crawler_thread(void *arg) {
             pthread_mutex_lock(&lru_locks[i]);
             search = do_item_crawl_q((item *)&crawlers[i]);
             if (search == NULL ||
-                (crawlers[i].remaining && --crawlers[i].remaining < 1)) {
+                (crawlers[i].pm->remaining && --crawlers[i].pm->remaining < 1)) {
                 if (settings.verbose > 2)
                     fprintf(stderr, "Nothing left to crawl for %d\n", i);
                 lru_crawler_class_done(i);
                 continue;
             }
-            uint32_t hv = hash(ITEM_key(search), search->nkey);
+            uint32_t hv = hash(ITEM_key(search), search->pm->nkey);
             /* Attempt to hash item lock the "search" item. If locked, no
              * other callers can incr the refcount
              */
@@ -409,7 +410,7 @@ static void *item_crawler_thread(void *arg) {
                 continue;
             }
 
-            crawlers[i].checked++;
+            crawlers[i].pm->checked++;
             /* Frees the item or decrements the refcount. */
             /* Interface for this could improve: do the free/decr here
              * instead? */
@@ -521,20 +522,21 @@ static int do_lru_crawler_start(uint32_t id, uint32_t remaining) {
     int starts = 0;
 
     pthread_mutex_lock(&lru_locks[sid]);
-    if (crawlers[sid].it_flags == 0) {
+    crawlers[sid].pm = &pmcrawlers[sid];
+    if (crawlers[sid].pm->it_flags == 0) {
         if (settings.verbose > 2)
             fprintf(stderr, "Kicking LRU crawler off for LRU %u\n", sid);
-        crawlers[sid].nbytes = 0;
-        crawlers[sid].nkey = 0;
-        crawlers[sid].it_flags = 1; /* For a crawler, this means enabled. */
+        crawlers[sid].pm->nbytes = 0;
+        crawlers[sid].pm->nkey = 0;
+        crawlers[sid].pm->it_flags = 1; /* For a crawler, this means enabled. */
         crawlers[sid].next = 0;
         crawlers[sid].prev = 0;
-        crawlers[sid].time = 0;
-        crawlers[sid].remaining = remaining;
-        crawlers[sid].slabs_clsid = sid;
-        crawlers[sid].reclaimed = 0;
-        crawlers[sid].unfetched = 0;
-        crawlers[sid].checked = 0;
+        crawlers[sid].pm->time = 0;
+        crawlers[sid].pm->remaining = remaining;
+        crawlers[sid].pm->slabs_clsid = sid;
+        crawlers[sid].pm->reclaimed = 0;
+        crawlers[sid].pm->unfetched = 0;
+        crawlers[sid].pm->checked = 0;
         do_item_linktail_q((item *)&crawlers[sid]);
         crawler_count++;
         starts++;

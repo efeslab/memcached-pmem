@@ -620,12 +620,12 @@ logger *logger_create(void) {
 
 static void _logger_log_evictions(logentry *e, item *it) {
     struct logentry_eviction *le = (struct logentry_eviction *) e->data;
-    le->exptime = (it->exptime > 0) ? (long long int)(it->exptime - current_time) : (long long int) -1;
-    le->latime = current_time - it->time;
-    le->it_flags = it->it_flags;
-    le->nkey = it->nkey;
+    le->exptime = (it->pm->exptime > 0) ? (long long int)(it->pm->exptime - current_time) : (long long int) -1;
+    le->latime = current_time - it->pm->time;
+    le->it_flags = it->pm->it_flags;
+    le->nkey = it->pm->nkey;
     le->clsid = ITEM_clsid(it);
-    memcpy(le->key, ITEM_key(it), it->nkey);
+    memcpy(le->key, ITEM_key(it), it->pm->nkey);
     e->size = sizeof(struct logentry_eviction) + le->nkey;
 }
 #ifdef EXTSTORE
@@ -635,13 +635,13 @@ static void _logger_log_evictions(logentry *e, item *it) {
  */
 static void _logger_log_ext_write(logentry *e, item *it, uint8_t bucket) {
     struct logentry_ext_write *le = (struct logentry_ext_write *) e->data;
-    le->exptime = (it->exptime > 0) ? (long long int)(it->exptime - current_time) : (long long int) -1;
-    le->latime = current_time - it->time;
-    le->it_flags = it->it_flags;
-    le->nkey = it->nkey;
+    le->exptime = (it->pm->exptime > 0) ? (long long int)(it->pm->exptime - current_time) : (long long int) -1;
+    le->latime = current_time - it->pm->time;
+    le->it_flags = it->pm->it_flags;
+    le->nkey = it->pm->nkey;
     le->clsid = ITEM_clsid(it);
     le->bucket = bucket;
-    memcpy(le->key, ITEM_key(it), it->nkey);
+    memcpy(le->key, ITEM_key(it), it->pm->nkey);
     e->size = sizeof(struct logentry_ext_write) + le->nkey;
 }
 #endif

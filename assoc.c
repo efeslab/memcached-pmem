@@ -90,7 +90,7 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
     item *ret = NULL;
     int depth = 0;
     while (it) {
-        if ((nkey == it->nkey) && (memcmp(key, ITEM_key(it), nkey) == 0)) {
+        if ((nkey == it->pm->nkey) && (memcmp(key, ITEM_key(it), nkey) == 0)) {
             ret = it;
             break;
         }
@@ -116,7 +116,7 @@ static item** _hashitem_before (const char *key, const size_t nkey, const uint32
         pos = &primary_hashtable[hv & hashmask(hashpower)];
     }
 
-    while (*pos && ((nkey != (*pos)->nkey) || memcmp(key, ITEM_key(*pos), nkey))) {
+    while (*pos && ((nkey != (*pos)->pm->nkey) || memcmp(key, ITEM_key(*pos), nkey))) {
         pos = &(*pos)->h_next;
     }
     return pos;
@@ -156,7 +156,7 @@ static void assoc_start_expand(void) {
 int assoc_insert(item *it, const uint32_t hv) {
     unsigned int oldbucket;
 
-//    assert(assoc_find(ITEM_key(it), it->nkey) == 0);  /* shouldn't have duplicately named things defined */
+//    assert(assoc_find(ITEM_key(it), it->pm->nkey) == 0);  /* shouldn't have duplicately named things defined */
 
     if (expanding &&
         (oldbucket = (hv & hashmask(hashpower - 1))) >= expand_bucket)
@@ -176,7 +176,7 @@ int assoc_insert(item *it, const uint32_t hv) {
     }
     pthread_mutex_unlock(&hash_items_counter_lock);
 
-    MEMCACHED_ASSOC_INSERT(ITEM_key(it), it->nkey, hash_items);
+    MEMCACHED_ASSOC_INSERT(ITEM_key(it), it->pm->nkey, hash_items);
     return 1;
 }
 
@@ -227,7 +227,7 @@ static void *assoc_maintenance_thread(void *arg) {
             if ((item_lock = item_trylock(expand_bucket))) {
                     for (it = old_hashtable[expand_bucket]; NULL != it; it = next) {
                         next = it->h_next;
-                        bucket = hash(ITEM_key(it), it->nkey) & hashmask(hashpower);
+                        bucket = hash(ITEM_key(it), it->pm->nkey) & hashmask(hashpower);
                         it->h_next = primary_hashtable[bucket];
                         primary_hashtable[bucket] = it;
                     }

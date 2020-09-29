@@ -6,6 +6,7 @@
 #include "memcached.h"
 #include <stddef.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #define PSLAB_POOL_SIG "PMCH"
 #define PSLAB_POOL_SIG_SIZE 4
@@ -54,6 +55,16 @@ typedef struct {
 #define PSLAB_SLAB2FRAME(slab) \
     ((slab) ? (pslab_t *)((char *)(slab) - sizeof (pslab_t)) : NULL)
 
+#ifdef AGAMOTTO_PSLAB
+#define PSLAB_WALK_FROM(fp, s) \
+    assert(vslab_start != NULL || ((char *) (s) - (char *) vslab_start) \
+            % PSLAB_FRAME_SIZE(vslab_pool) == 0); \
+    (fp) = (s) ? (s) : vslab_start; \
+    for (int _i = (s) ? ((char *)(s) - (char *) vslab_start) \
+            / PSLAB_FRAME_SIZE(vslab_pool) : 0; \
+        (fp) >= vslab_start && (fp) < vslab_end; \
+        _i++, (fp) = PSLAB_NEXT_FRAME(vslab_pool, (fp)))
+#else
 #define PSLAB_WALK_FROM(fp, s) \
     assert(pslab_start != NULL || ((char *) (s) - (char *) pslab_start) \
             % PSLAB_FRAME_SIZE(pslab_pool) == 0); \
@@ -62,31 +73,74 @@ typedef struct {
             / PSLAB_FRAME_SIZE(pslab_pool) : 0; \
         (fp) >= pslab_start && (fp) < pslab_end; \
         _i++, (fp) = PSLAB_NEXT_FRAME(pslab_pool, (fp)))
+#endif
+
 #define PSLAB_WALK_ID() (_i)
 #define PSLAB_WALK(fp) PSLAB_WALK_FROM((fp), NULL)
 
 static pslab_pool_t *pslab_pool;
 static pslab_t *pslab_start, *pslab_end;
+/**
+ * Agamotto
+ * 
+ * We essentially want a volatile metadata structure which then gets pointers
+ * to PM for just the persistent data.
+ */
+static pslab_pool_t *vslab_pool;
+static pslab_t *vslab_start, *vslab_end;
+
+#ifdef AGAMOTTO_PSLAB
+void *vslab_to_pslab(void *ptr) {
+    return (void*)(((char*)pslab_pool) + ((char*)ptr - (char*)vslab_pool));
+}
+#endif
 
 uint64_t pslab_addr2off(void *addr) {
+#ifndef AGAMOTTO_PSLAB
     return ((char *) addr >= (char *) pslab_start) ?
         (char *) addr - (char *) pslab_start : 0;
+#else 
+    return ((char *) addr >= (char *) vslab_start) ?
+        (char *) addr - (char *) vslab_start : 0;
+#endif 
 }
 
+#ifndef AGAMOTTO_PSLAB
 #define pslab_off2addr(off) ((off) ? (void *) ((char *)pslab_start + (off)) : NULL)
+#else
+#define pslab_off2addr(off) ((off) ? (void *) ((char *)vslab_start + (off)) : NULL)
+#endif
 
+#ifndef AGAMOTTO_PSLAB
 #define pslab_addr2slab(addr) ((char *) (addr) >= (char *) pslab_start ? \
     (pslab_t *) ((char *)(addr) - ((char *)(addr) - (char *) pslab_start) % \
     PSLAB_FRAME_SIZE(pslab_pool)) : NULL)
+#else
+#define pslab_addr2slab(addr) ((char *) (addr) >= (char *) vslab_start ? \
+    (pslab_t *) ((char *)(addr) - ((char *)(addr) - (char *) vslab_start) % \
+    PSLAB_FRAME_SIZE(vslab_pool)) : NULL)
+#endif
 
 int pslab_contains(char *p) {
-    if (p >= (char *) pslab_start && p < (char *) pslab_end)
+#ifndef AGAMOTTO_PSLAB
+    if (p >= (char *) pslab_start && p < (char *) pslab_end) {
+#else
+    if (p >= (char *) vslab_start && p < (char *) vslab_end) {
+#endif
         return 1;
+    }
     return 0;
 }
 
 void pslab_use_slab(void *p, int id, unsigned int size) {
+#ifndef AGAMOTTO_PSLAB
     pslab_t *fp = PSLAB_SLAB2FRAME(p);
+#else
+    pslab_t *vol_fp = PSLAB_SLAB2FRAME(p);
+    vol_fp->size = size;
+    vol_fp->id = id;
+    pslab_t *fp = vslab_to_pslab(vol_fp);
+#endif
     fp->size = size;
     pmem_member_persist(fp, size);
     fp->id = id;
@@ -101,7 +155,11 @@ void *pslab_get_free_slab(void *slab) {
         cur = fp;
     else if (fp != cur)
         return NULL;
+#ifndef AGAMOTTO_PSLAB
     PSLAB_WALK_FROM(fp, PSLAB_NEXT_FRAME(pslab_pool, cur)) {
+#else
+    PSLAB_WALK_FROM(fp, PSLAB_NEXT_FRAME(vslab_pool, cur)) {
+#endif
         if (fp->id == 0 || (fp->flags & (PSLAB_LINKED | PSLAB_CHUNK)) == 0) {
             cur = fp;
             return fp->slab;
@@ -144,17 +202,20 @@ static uint8_t pslab_checksum_check(int i) {
 }
 
 static void pslab_checksum_update(int sum, int i) {
+    vslab_pool->checksum[i] = (uint8_t) (~(pslab_chksum0 + sum) + 1);
     pslab_pool->checksum[i] = (uint8_t) (~(pslab_chksum0 + sum) + 1);
 }
 
 void pslab_update_flushtime(uint32_t time) {
     int i = (pslab_pool->valid - 1) ^ 1;
 
+    vslab_pool->flush_time[i] = time;
     pslab_pool->flush_time[i] = time;
     pslab_checksum_update(pslab_do_checksum(&time, sizeof (time)), i);
     pmem_member_flush(pslab_pool, flush_time);
     pmem_member_persist(pslab_pool, checksum);
 
+    vslab_pool->valid = i + 1;
     pslab_pool->valid = i + 1;
     pmem_member_persist(pslab_pool, valid);
 }
@@ -164,13 +225,14 @@ time_t pslab_process_started(time_t process_started) {
 
     if (process_started) {
         process_started_new = process_started;
-        return pslab_pool->process_started;
+        return vslab_pool->process_started;
     } else {
         return process_started_new;
     }
 }
 
 int pslab_do_recover() {
+    // AGAMOTTO TODO: Check this at some point
     pslab_t *fp;
     uint8_t *ptr;
     int i, size, perslab;
@@ -195,17 +257,17 @@ int pslab_do_recover() {
         for (i = 0, ptr = fp->slab; i < perslab; i++, ptr += size) {
             item *it = (item *) ptr;
 
-            if (it->it_flags & ITEM_LINKED) {
+            if (it->pm->it_flags & ITEM_LINKED) {
                 if (item_is_flushed(it) ||
-                        (it->exptime != 0 && it->exptime <= current_time)) {
-                    it->it_flags = ITEM_PSLAB;
-                    pmem_member_persist(it, it_flags);
+                        (it->pm->exptime != 0 && it->pm->exptime <= current_time)) {
+                    it->pm->it_flags = ITEM_PSLAB;
+                    pmem_member_persist(it, pm->it_flags);
                 } else {
                     fp->flags |= PSLAB_LINKED;
-                    if (it->it_flags & ITEM_CHUNKED)
+                    if (it->pm->it_flags & ITEM_CHUNKED)
                         fp->flags |= PSLAB_CHUNKED;
                 }
-            } else if (it->it_flags & ITEM_CHUNK) {
+            } else if (it->pm->it_flags & ITEM_CHUNK) {
                 ((item_chunk *)it)->head = NULL; /* non-persistent */
             }
         }
@@ -221,7 +283,7 @@ int pslab_do_recover() {
         for (i = 0, ptr = fp->slab; i < perslab; i++, ptr += size) {
             item *it = (item *) ptr;
 
-            if ((it->it_flags & ITEM_LINKED) && (it->it_flags & ITEM_CHUNKED)) {
+            if ((it->pm->it_flags & ITEM_LINKED) && (it->pm->it_flags & ITEM_CHUNKED)) {
                 item_chunk *nch;
                 item_chunk *ch = (item_chunk *) ITEM_data(it);
                 ch->head = it;
@@ -253,12 +315,12 @@ int pslab_do_recover() {
         perslab = pslab_pool->slab_page_size / size;
         for (i = 0, ptr = fp->slab; i < perslab; i++, ptr += size) {
             item *it = (item *) ptr;
-            if (it->it_flags & ITEM_LINKED) {
+            if (it->pm->it_flags & ITEM_LINKED) {
                 do_slab_realloc(it, id);
-                do_item_relink(it, hash(ITEM_key(it), it->nkey));
-            } else if ((it->it_flags & ITEM_CHUNK) == 0 ||
+                do_item_relink(it, hash(ITEM_key(it), it->pm->nkey));
+            } else if ((it->pm->it_flags & ITEM_CHUNK) == 0 ||
                     ((item_chunk *)it)->head == NULL) {
-                assert((it->it_flags & ITEM_CHUNKED) == 0);
+                assert((it->pm->it_flags & ITEM_CHUNKED) == 0);
                 do_slabs_free(ptr, 0, id);
             }
         }
@@ -269,6 +331,7 @@ int pslab_do_recover() {
 
 int pslab_pre_recover(char *name, uint32_t *slab_sizes, int slab_max,
         int slab_page_size) {
+    // Agamotto: check at some point
     size_t mapped_len;
     int is_pmem;
     int i;
@@ -333,6 +396,13 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
         return -1;
     }
 
+    vslab_pool = mmap(NULL, mapped_len, PROT_READ | PROT_WRITE, 
+                      MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+    if (vslab_pool == MAP_FAILED) {
+        perror("mmap failed");
+        return -1;
+    }
+
     length = (sizeof (pslab_pool_t) + sizeof (pslab_pool->slabclass_sizes[0])
         * slabclass_num + 7) & PSLAB_ALIGN_MASK;
     pmem_memset_nodrain(pslab_pool, 0, length);
@@ -366,6 +436,11 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
 
     pslab_pool->valid = 1;
     pmem_member_persist(pslab_pool, valid);
+
+    *vslab_pool = *pslab_pool;
+    vslab_start = PSLAB_FIRST_FRAME(vslab_pool);
+    vslab_end = (pslab_t *) ((char *) vslab_start + vslab_pool->slab_num
+        * PSLAB_FRAME_SIZE(vslab_pool));
 
     return 0;
 }

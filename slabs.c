@@ -388,13 +388,15 @@ static void *do_slabs_alloc(const size_t size, unsigned int id, uint64_t *total_
     slabclass_t *p;
     void *ret = NULL;
     item *it = NULL;
+    // Agamotto
+    // item *it = malloc(sizeof(*it));
 
     if (id < POWER_SMALLEST || id > power_largest) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, 0);
         return NULL;
     }
     p = &slabclass[id];
-    assert(p->sl_curr == 0 || ((item *)p->slots)->slabs_clsid == 0);
+    assert(p->sl_curr == 0 || ((item *)p->slots)->pm->slabs_clsid == 0);
     if (total_bytes != NULL) {
         *total_bytes = p->requested;
     }
@@ -413,8 +415,8 @@ static void *do_slabs_alloc(const size_t size, unsigned int id, uint64_t *total_
         if (it->next) it->next->prev = 0;
         /* Kill flag and initialize refcount here for lock safety in slab
          * mover's freeness detection. */
-        it->it_flags &= ~ITEM_SLABBED;
-        it->refcount = 1;
+        it->pm->it_flags &= ~ITEM_SLABBED;
+        it->pm->refcount = 1;
         p->sl_curr--;
         ret = (void *)it;
     } else {
@@ -434,16 +436,16 @@ static void *do_slabs_alloc(const size_t size, unsigned int id, uint64_t *total_
 void do_slab_realloc(item *it, unsigned int id) {
     slabclass_t *p = &slabclass[id];
 
-    assert(it->it_flags & ITEM_LINKED);
-    assert((it->it_flags & ITEM_SLABBED) == 0);
+    assert(it->pm->it_flags & ITEM_LINKED);
+    assert((it->pm->it_flags & ITEM_SLABBED) == 0);
 //TBD: stats recover: (see do_slabs_alloc(), do_item_alloc())
 //     MEMCACHED_SLABS_ALLOCATE(size, id, p->size, ret);
 
-    it->refcount = 0;
-    if (it->it_flags & ITEM_CHUNKED) {
+    it->pm->refcount = 0;
+    if (it->pm->it_flags & ITEM_CHUNKED) {
         item_chunk *ch = (item_chunk *) ITEM_data(it);
         ch = ch->next;
-        p->requested += it->nkey + 1 + it->nsuffix + sizeof(item) +
+        p->requested += it->pm->nkey + 1 + it->pm->nsuffix + sizeof(item) +
             sizeof(item_chunk);
         while (ch) {
             p->requested += ch->size + sizeof(item_chunk);
@@ -459,13 +461,13 @@ static void do_slabs_free_chunked(item *it, const size_t size) {
     slabclass_t *p;
 
 #ifdef PSLAB
-    if (it->it_flags & ITEM_PSLAB) {
-        it->it_flags = ITEM_SLABBED | ITEM_PSLAB;
-        pmem_member_persist(it, it_flags);
+    if (it->pm->it_flags & ITEM_PSLAB) {
+        it->pm->it_flags = ITEM_SLABBED | ITEM_PSLAB;
+        pmem_member_persist(it, pm->it_flags);
     } else
 #endif
-    it->it_flags = ITEM_SLABBED;
-    it->slabs_clsid = 0;
+    it->pm->it_flags = ITEM_SLABBED;
+    it->pm->slabs_clsid = 0;
     it->prev = 0;
     // header object's original classid is stored in chunk.
     p = &slabclass[chunk->orig_clsid];
@@ -485,7 +487,7 @@ static void do_slabs_free_chunked(item *it, const size_t size) {
     p->slots = it;
     p->sl_curr++;
     // TODO: macro
-    p->requested -= it->nkey + 1 + it->nsuffix + sizeof(item) + sizeof(item_chunk);
+    p->requested -= it->pm->nkey + 1 + it->pm->nsuffix + sizeof(item) + sizeof(item_chunk);
     if (settings.use_cas) {
         p->requested -= sizeof(uint64_t);
     }
@@ -495,7 +497,7 @@ static void do_slabs_free_chunked(item *it, const size_t size) {
         assert(chunk->it_flags == ITEM_CHUNK);
 #ifdef PSLAB
         if (chunk->it_flags & ITEM_PSLAB) {
-            it->it_flags = ITEM_SLABBED | ITEM_PSLAB;
+            it->pm->it_flags = ITEM_SLABBED | ITEM_PSLAB;
             /* no persist since non-referenced chunks can always be reclaimed */
         } else
 #endif
@@ -524,6 +526,8 @@ static
 void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     slabclass_t *p;
     item *it;
+    // Agamotto
+    // item *it = malloc(sizeof(*it));
 
     assert(id >= POWER_SMALLEST && id <= power_largest);
     if (id < POWER_SMALLEST || id > power_largest)
@@ -533,18 +537,25 @@ void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     p = &slabclass[id];
 
     it = (item *)ptr;
-    if ((it->it_flags & ITEM_CHUNKED) == 0) {
-#ifdef EXTSTORE
-        bool is_hdr = it->it_flags & ITEM_HDR;
+
+    // Agamotto
+#ifdef PSLAB
+    // it->pm = calloc(1, sizeof(p->size));
+    it->pm = vslab_to_pslab(ptr);
 #endif
-        it->it_flags = ITEM_SLABBED;
+
+    if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
+#ifdef EXTSTORE
+        bool is_hdr = it->pm->it_flags & ITEM_HDR;
+#endif
+        it->pm->it_flags = ITEM_SLABBED;
 #ifdef PSLAB
         if (pslab_contains((char *)it)) {
-            it->it_flags |= ITEM_PSLAB;
+            it->pm->it_flags |= ITEM_PSLAB;
             /* no persist since non-linked items can always be reclaimed */
         }
 #endif
-        it->slabs_clsid = 0;
+        it->pm->slabs_clsid = 0;
         it->prev = 0;
         it->next = p->slots;
         if (it->next) it->next->prev = it;
@@ -904,13 +915,13 @@ static void *slab_rebalance_alloc(const size_t size, unsigned int id) {
              * we've already done the work of unlinking it from the freelist.
              */
             s_cls->requested -= size;
-            new_it->refcount = 0;
+            new_it->pm->refcount = 0;
 #ifdef PSLAB
-            if (new_it->it_flags & ITEM_PSLAB)
-                new_it->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
+            if (new_it->pm->it_flags & ITEM_PSLAB)
+                new_it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
             else
 #endif
-            new_it->it_flags = ITEM_SLABBED|ITEM_FETCHED;
+            new_it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED;
 #ifdef DEBUG_SLAB_MOVER
             memcpy(ITEM_key(new_it), "deadbeef", 8);
 #endif
@@ -927,7 +938,7 @@ static void *slab_rebalance_alloc(const size_t size, unsigned int id) {
 /* detaches item/chunk from freelist. */
 static void slab_rebalance_cut_free(slabclass_t *s_cls, item *it) {
     /* Ensure this was on the freelist and nothing else. */
-    assert(it->it_flags == ITEM_SLABBED);
+    assert(it->pm->it_flags == ITEM_SLABBED);
     if (s_cls->slots == it) {
         s_cls->slots = it->next;
     }
@@ -979,9 +990,9 @@ static int slab_rebalance_move(void) {
         item_chunk *ch = NULL;
         status = MOVE_PASS;
 #ifdef PSLAB
-        if ((it->it_flags & ITEM_CHUNK) && !(it->it_flags & ITEM_CHUNKED)) {
+        if ((it->pm->it_flags & ITEM_CHUNK) && !(it->pm->it_flags & ITEM_CHUNKED)) {
 #else
-        if (it->it_flags & ITEM_CHUNK) {
+        if (it->pm->it_flags & ITEM_CHUNK) {
 #endif
             /* This chunk is a chained part of a larger item. */
             ch = (item_chunk *) it;
@@ -989,29 +1000,29 @@ static int slab_rebalance_move(void) {
              * lock the entire structure. If a chunk has ITEM_CHUNK flag, its
              * head cannot be slabbed, so the normal routine is safe. */
             it = ch->head;
-            assert(it->it_flags & ITEM_CHUNKED);
+            assert(it->pm->it_flags & ITEM_CHUNKED);
         }
 
         /* ITEM_FETCHED when ITEM_SLABBED is overloaded to mean we've cleared
          * the chunk for move. Only these two flags should exist.
          */
-        if (it->it_flags != (ITEM_SLABBED|ITEM_FETCHED)) {
+        if (it->pm->it_flags != (ITEM_SLABBED|ITEM_FETCHED)) {
             /* ITEM_SLABBED can only be added/removed under the slabs_lock */
-            if (it->it_flags & ITEM_SLABBED) {
+            if (it->pm->it_flags & ITEM_SLABBED) {
                 assert(ch == NULL);
                 slab_rebalance_cut_free(s_cls, it);
                 status = MOVE_FROM_SLAB;
-            } else if ((it->it_flags & ITEM_LINKED) != 0) {
+            } else if ((it->pm->it_flags & ITEM_LINKED) != 0) {
                 /* If it doesn't have ITEM_SLABBED, the item could be in any
                  * state on its way to being freed or written to. If no
                  * ITEM_SLABBED, but it's had ITEM_LINKED, it must be active
                  * and have the key written to it already.
                  */
-                hv = hash(ITEM_key(it), it->nkey);
+                hv = hash(ITEM_key(it), it->pm->nkey);
                 if ((hold_lock = item_trylock(hv)) == NULL) {
                     status = MOVE_LOCKED;
                 } else {
-                    bool is_linked = (it->it_flags & ITEM_LINKED);
+                    bool is_linked = (it->pm->it_flags & ITEM_LINKED);
                     refcount = refcount_incr(it);
                     if (refcount == 2) { /* item is linked but not busy */
                         /* Double check ITEM_LINKED flag here, since we're
@@ -1038,7 +1049,7 @@ static int slab_rebalance_move(void) {
                     } else {
                         if (settings.verbose > 2) {
                             fprintf(stderr, "Slab reassign hit a busy item: refcount: %d (%d -> %d)\n",
-                                it->refcount, slab_rebal.s_clsid, slab_rebal.d_clsid);
+                                it->pm->refcount, slab_rebal.s_clsid, slab_rebal.d_clsid);
                         }
                         status = MOVE_BUSY;
                     }
@@ -1069,17 +1080,17 @@ static int slab_rebalance_move(void) {
                 /* Check if expired or flushed */
                 ntotal = ITEM_ntotal(it);
 #ifdef EXTSTORE
-                if (it->it_flags & ITEM_HDR) {
+                if (it->pm->it_flags & ITEM_HDR) {
                     ntotal = (ntotal - it->nbytes) + sizeof(item_hdr);
                 }
 #endif
                 /* REQUIRES slabs_lock: CHECK FOR cls->sl_curr > 0 */
-                if (ch == NULL && (it->it_flags & ITEM_CHUNKED)) {
+                if (ch == NULL && (it->pm->it_flags & ITEM_CHUNKED)) {
                     /* Chunked should be identical to non-chunked, except we need
                      * to swap out ntotal for the head-chunk-total. */
                     ntotal = s_cls->size;
                 }
-                if ((it->exptime != 0 && it->exptime < current_time)
+                if ((it->pm->exptime != 0 && it->pm->exptime < current_time)
                     || item_is_flushed(it)) {
                     /* Expired, don't save. */
                     save_item = 0;
@@ -1101,18 +1112,18 @@ static int slab_rebalance_move(void) {
                 unsigned int requested_adjust = 0;
                 if (save_item) {
                     if (ch == NULL) {
-                        assert((new_it->it_flags & ITEM_CHUNKED) == 0);
+                        assert((new_it->pm->it_flags & ITEM_CHUNKED) == 0);
                         /* if free memory, memcpy. clear prev/next/h_bucket */
                         memcpy(new_it, it, ntotal);
                         new_it->prev = 0;
                         new_it->next = 0;
                         new_it->h_next = 0;
                         /* These are definitely required. else fails assert */
-                        new_it->it_flags &= ~ITEM_LINKED;
-                        new_it->refcount = 0;
+                        new_it->pm->it_flags &= ~ITEM_LINKED;
+                        new_it->pm->refcount = 0;
                         do_item_replace(it, new_it, hv);
                         /* Need to walk the chunks and repoint head  */
-                        if (new_it->it_flags & ITEM_CHUNKED) {
+                        if (new_it->pm->it_flags & ITEM_CHUNKED) {
                             item_chunk *fch = (item_chunk *) ITEM_data(new_it);
                             fch->next->prev = fch;
                             while (fch) {
@@ -1120,13 +1131,13 @@ static int slab_rebalance_move(void) {
                                 fch = fch->next;
                             }
                         }
-                        it->refcount = 0;
+                        it->pm->refcount = 0;
 #ifdef PSLAB
-                        if (it->it_flags & ITEM_PSLAB)
-                            it->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
+                        if (it->pm->it_flags & ITEM_PSLAB)
+                            it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
                         else
 #endif
-                        it->it_flags = ITEM_SLABBED|ITEM_FETCHED;
+                        it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED;
 #ifdef DEBUG_SLAB_MOVER
                         memcpy(ITEM_key(it), "deadbeef", 8);
 #endif
@@ -1166,13 +1177,13 @@ static int slab_rebalance_move(void) {
                 s_cls->requested -= requested_adjust;
                 break;
             case MOVE_FROM_SLAB:
-                it->refcount = 0;
+                it->pm->refcount = 0;
 #ifdef PSLAB
-                if (it->it_flags & ITEM_PSLAB)
-                    it->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
+                if (it->pm->it_flags & ITEM_PSLAB)
+                    it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
                 else
 #endif
-                it->it_flags = ITEM_SLABBED|ITEM_FETCHED;
+                it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED;
 #ifdef DEBUG_SLAB_MOVER
                 memcpy(ITEM_key(it), "deadbeef", 8);
 #endif
@@ -1230,14 +1241,14 @@ static void slab_rebalance_finish(void) {
     slab_rebal.slab_pos = slab_rebal.slab_start;
     while (1) {
         item *it = slab_rebal.slab_pos;
-        assert(it->it_flags == (ITEM_SLABBED|ITEM_FETCHED));
+        assert(it->pm->it_flags == (ITEM_SLABBED|ITEM_FETCHED));
         assert(memcmp(ITEM_key(it), "deadbeef", 8) == 0);
 #ifdef PSLAB
-        if (it->it_flags & ITEM_PSLAB)
-            it->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
+        if (it->pm->it_flags & ITEM_PSLAB)
+            it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED|ITEM_PSLAB;
         else
 #endif
-        it->it_flags = ITEM_SLABBED|ITEM_FETCHED;
+        it->pm->it_flags = ITEM_SLABBED|ITEM_FETCHED;
         slab_rebal.slab_pos = (char *)slab_rebal.slab_pos + s_cls->size;
         if (slab_rebal.slab_pos >= slab_rebal.slab_end)
             break;

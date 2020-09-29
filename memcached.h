@@ -28,6 +28,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include "itoa_ljust.h"
 #include "protocol_binary.h"
@@ -117,36 +118,36 @@
 #define TAIL_REPAIR_TIME_DEFAULT 0
 
 /* warning: don't use these macros with a function, as it evals its arg twice */
-#define ITEM_get_cas(i) (((i)->it_flags & ITEM_CAS) ? \
-        (i)->data->cas : (uint64_t)0)
+#define ITEM_get_cas(i) (((i)->pm->it_flags & ITEM_CAS) ? \
+        (i)->pm->data->cas : (uint64_t)0)
 
 #define ITEM_set_cas(i,v) { \
-    if ((i)->it_flags & ITEM_CAS) { \
-        (i)->data->cas = v; \
+    if ((i)->pm->it_flags & ITEM_CAS) { \
+        (i)->pm->data->cas = v; \
     } \
 }
 
-#define ITEM_key(item) (((char*)&((item)->data)) \
-         + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
+#define ITEM_key(item) (((char*)&((item)->pm->data)) \
+         + (((item)->pm->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
 
-#define ITEM_suffix(item) ((char*) &((item)->data) + (item)->nkey + 1 \
-         + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
+#define ITEM_suffix(item) ((char*) &((item)->pm->data) + (item)->pm->nkey + 1 \
+         + (((item)->pm->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
 
-#define ITEM_data(item) ((char*) &((item)->data) + (item)->nkey + 1 \
-         + (item)->nsuffix \
-         + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
+#define ITEM_data(item) ((char*) &((item)->pm->data) + (item)->pm->nkey + 1 \
+         + (item)->pm->nsuffix \
+         + (((item)->pm->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
 
-#define ITEM_ntotal(item) (sizeof(struct _stritem) + (item)->nkey + 1 \
-         + (item)->nsuffix + (item)->nbytes \
-         + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
+#define ITEM_ntotal(item) (sizeof(struct _stritem) + (item)->pm->nkey + 1 \
+         + (item)->pm->nsuffix + (item)->pm->nbytes \
+         + (((item)->pm->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
 
 #ifdef PSLAB
-#define ITEM_dtotal(item) (item)->nkey + 1 + (item)->nsuffix + (item)->nbytes \
-         + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0)
+#define ITEM_dtotal(item) (item)->pm->nkey + 1 + (item)->pm->nsuffix + (item)->pm->nbytes \
+         + (((item)->pm->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0)
 #endif
 
-#define ITEM_clsid(item) ((item)->slabs_clsid & ~(3<<6))
-#define ITEM_lruid(item) ((item)->slabs_clsid & (3<<6))
+#define ITEM_clsid(item) ((item)->pm->slabs_clsid & ~(3<<6))
+#define ITEM_lruid(item) ((item)->pm->slabs_clsid & (3<<6))
 
 #define STAT_KEY_LEN 128
 #define STAT_VAL_LEN 128
@@ -480,26 +481,9 @@ extern struct settings settings;
 #endif
 
 /**
- * iangneal: volatile use
- * 
- * Rather than iterating through the item's next/prev, you grab this struct,
- * do it, then return the item
+ * iangneal: volatile use fixes
  */
-typedef struct _volitem {
-    struct _volitem *next;
-    struct _volitem *prev;
-    void *ptr;
-} volitem;
-
-/**
- * Structure for storing items within memcached.
- */
-typedef struct _stritem {
-    /* Protected by LRU locks */
-    struct _stritem *next;
-    struct _stritem *prev;
-    /* Rest are protected by an item lock */
-    struct _stritem *h_next;    /* hash chain next */
+typedef struct _pmitem {
     rel_time_t      time;       /* least recent access */
     rel_time_t      exptime;    /* expire time */
     int             nbytes;     /* size of data */
@@ -518,6 +502,18 @@ typedef struct _stritem {
     /* then null-terminated key */
     /* then " flags length\r\n" (no terminating null) */
     /* then data with terminating \r\n (no terminating null; it's binary!) */
+} pmitem;
+
+/**
+ * Structure for storing items within memcached.
+ */
+typedef struct _stritem {
+    /* Protected by LRU locks */
+    struct _stritem *next;
+    struct _stritem *prev;
+    /* Rest are protected by an item lock */
+    struct _stritem *h_next;    /* hash chain next */
+    pmitem *pm;
 } item;
 
 // TODO: If we eventually want user loaded modules, we can't use an enum :(
@@ -525,10 +521,10 @@ enum crawler_run_type {
     CRAWLER_AUTOEXPIRE=0, CRAWLER_EXPIRED, CRAWLER_METADUMP
 };
 
+/**
+ * crawler gets typecast as item, so we must patch it appropriately
+ */
 typedef struct {
-    struct _stritem *next;
-    struct _stritem *prev;
-    struct _stritem *h_next;    /* hash chain next */
     rel_time_t      time;       /* least recent access */
     rel_time_t      exptime;    /* expire time */
     int             nbytes;     /* size of data */
@@ -541,6 +537,13 @@ typedef struct {
     uint64_t        reclaimed;  /* items reclaimed during this crawl. */
     uint64_t        unfetched;  /* items reclaimed unfetched during this crawl. */
     uint64_t        checked;    /* items examined during this crawl. */
+} pmcrawler;
+
+typedef struct {
+    struct _stritem *next;
+    struct _stritem *prev;
+    struct _stritem *h_next;    /* hash chain next */
+    pmcrawler *pm;
 } crawler;
 
 /* Header when an item is actually a chunk of another item. */
@@ -786,8 +789,8 @@ void *item_trylock(uint32_t hv);
 void item_trylock_unlock(void *arg);
 void item_unlock(uint32_t hv);
 void pause_threads(enum pause_thread_types type);
-#define refcount_incr(it) ++(it->refcount)
-#define refcount_decr(it) --(it->refcount)
+#define refcount_incr(it) ++(it->pm->refcount)
+#define refcount_decr(it) --(it->pm->refcount)
 void STATS_LOCK(void);
 void STATS_UNLOCK(void);
 void threadlocal_stats_reset(void);

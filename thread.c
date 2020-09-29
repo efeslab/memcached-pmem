@@ -570,7 +570,7 @@ int item_link(item *item) {
     int ret;
     uint32_t hv;
 
-    hv = hash(ITEM_key(item), item->nkey);
+    hv = hash(ITEM_key(item), item->pm->nkey);
     item_lock(hv);
     ret = do_item_link(item, hv);
     item_unlock(hv);
@@ -583,7 +583,7 @@ int item_link(item *item) {
  */
 void item_remove(item *item) {
     uint32_t hv;
-    hv = hash(ITEM_key(item), item->nkey);
+    hv = hash(ITEM_key(item), item->pm->nkey);
 
     item_lock(hv);
     do_item_remove(item);
@@ -604,7 +604,7 @@ int item_replace(item *old_it, item *new_it, const uint32_t hv) {
  */
 void item_unlink(item *item) {
     uint32_t hv;
-    hv = hash(ITEM_key(item), item->nkey);
+    hv = hash(ITEM_key(item), item->pm->nkey);
     item_lock(hv);
     do_item_unlink(item, hv);
     item_unlock(hv);
@@ -634,7 +634,7 @@ enum store_item_type store_item(item *item, int comm, conn* c) {
     enum store_item_type ret;
     uint32_t hv;
 
-    hv = hash(ITEM_key(item), item->nkey);
+    hv = hash(ITEM_key(item), item->pm->nkey);
     item_lock(hv);
     ret = do_store_item(item, comm, c, hv);
     item_unlock(hv);
