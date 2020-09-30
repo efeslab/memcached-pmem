@@ -93,6 +93,13 @@ static pslab_t *vslab_start, *vslab_end;
 void *vslab_to_pslab(void *ptr) {
     return (void*)(((char*)pslab_pool) + ((char*)ptr - (char*)vslab_pool));
 }
+
+void *vslab_ptr_to_pslab_ptr(void *ptr, void *root, size_t sz) {
+    size_t item_num = ((char*)ptr - (char*)root) / sizeof(item);
+    // size_t item_num = ((char*)ptr - (char*)root) / sz;
+    void *proot = vslab_to_pslab(root);
+    return (void*)(((char*) proot) + (item_num * sz));
+}
 #endif
 
 uint64_t pslab_addr2off(void *addr) {
@@ -135,16 +142,16 @@ int pslab_contains(char *p) {
 void pslab_use_slab(void *p, int id, unsigned int size) {
 #ifndef AGAMOTTO_PSLAB
     pslab_t *fp = PSLAB_SLAB2FRAME(p);
-#else
-    pslab_t *vol_fp = PSLAB_SLAB2FRAME(p);
-    vol_fp->size = size;
-    vol_fp->id = id;
-    pslab_t *fp = vslab_to_pslab(vol_fp);
-#endif
     fp->size = size;
     pmem_member_persist(fp, size);
     fp->id = id;
     pmem_member_persist(fp, id);
+#else
+    pslab_t *vol_fp = PSLAB_SLAB2FRAME(p);
+    vol_fp->size = size;
+    vol_fp->id = id;
+    // pslab_t *fp = vslab_to_pslab(vol_fp);
+#endif
 }
 
 void *pslab_get_free_slab(void *slab) {
@@ -313,6 +320,7 @@ int pslab_do_recover() {
         id = fp->id;
         size = fp->size;
         perslab = pslab_pool->slab_page_size / size;
+        uint8_t* rptr = fp->slab;
         for (i = 0, ptr = fp->slab; i < perslab; i++, ptr += size) {
             item *it = (item *) ptr;
             if (it->pm->it_flags & ITEM_LINKED) {
@@ -321,7 +329,7 @@ int pslab_do_recover() {
             } else if ((it->pm->it_flags & ITEM_CHUNK) == 0 ||
                     ((item_chunk *)it)->head == NULL) {
                 assert((it->pm->it_flags & ITEM_CHUNKED) == 0);
-                do_slabs_free(ptr, 0, id);
+                do_slabs_free(ptr, 0, id, rptr);
             }
         }
     }
@@ -396,12 +404,7 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
         return -1;
     }
 
-    vslab_pool = mmap(NULL, mapped_len, PROT_READ | PROT_WRITE, 
-                      MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-    if (vslab_pool == MAP_FAILED) {
-        perror("mmap failed");
-        return -1;
-    }
+    
 
     length = (sizeof (pslab_pool_t) + sizeof (pslab_pool->slabclass_sizes[0])
         * slabclass_num + 7) & PSLAB_ALIGN_MASK;
@@ -436,6 +439,16 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
 
     pslab_pool->valid = 1;
     pmem_member_persist(pslab_pool, valid);
+
+    // We want this to be smaller/more compact
+    // size_t pitem_sz = pslab_pool->slab_page_size;
+
+    vslab_pool = mmap(NULL, mapped_len, PROT_READ | PROT_WRITE, 
+                      MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+    if (vslab_pool == MAP_FAILED) {
+        perror("mmap failed");
+        return -1;
+    }
 
     *vslab_pool = *pslab_pool;
     vslab_start = PSLAB_FIRST_FRAME(vslab_pool);

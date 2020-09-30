@@ -29,6 +29,8 @@
 #include <unistd.h>
 #include <assert.h>
 #include <stdbool.h>
+#include <immintrin.h>
+#include <xmmintrin.h>
 
 #include "itoa_ljust.h"
 #include "protocol_binary.h"
@@ -513,8 +515,12 @@ typedef struct _stritem {
     struct _stritem *prev;
     /* Rest are protected by an item lock */
     struct _stritem *h_next;    /* hash chain next */
+    // uint32_t hash;
     pmitem *pm;
 } item;
+
+
+#define pmprefetch(item) _mm_prefetch((item)->pm, _MM_HINT_T0)
 
 // TODO: If we eventually want user loaded modules, we can't use an enum :(
 enum crawler_run_type {

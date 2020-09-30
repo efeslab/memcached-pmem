@@ -87,17 +87,22 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
         it = primary_hashtable[hv & hashmask(hashpower)];
     }
 
+    if (it) pmprefetch(it);
+
     item *ret = NULL;
     int depth = 0;
     while (it) {
+        if (it->h_next) pmprefetch(it->h_next);
         if ((nkey == it->pm->nkey) && (memcmp(key, ITEM_key(it), nkey) == 0)) {
             ret = it;
             break;
         }
-        it = it->h_next;
+        it = it->h_next; 
         ++depth;
     }
     MEMCACHED_ASSOC_FIND(key, nkey, depth);
+    if (ret) pmprefetch(ret);
+    
     return ret;
 }
 
@@ -115,6 +120,8 @@ static item** _hashitem_before (const char *key, const size_t nkey, const uint32
     } else {
         pos = &primary_hashtable[hv & hashmask(hashpower)];
     }
+
+    pmprefetch(*pos);
 
     while (*pos && ((nkey != (*pos)->pm->nkey) || memcmp(key, ITEM_key(*pos), nkey))) {
         pos = &(*pos)->h_next;
@@ -167,6 +174,8 @@ int assoc_insert(item *it, const uint32_t hv) {
         it->h_next = primary_hashtable[hv & hashmask(hashpower)];
         primary_hashtable[hv & hashmask(hashpower)] = it;
     }
+
+    pmprefetch(it);
 
     pthread_mutex_lock(&hash_items_counter_lock);
     hash_items++;
@@ -225,8 +234,11 @@ static void *assoc_maintenance_thread(void *arg) {
              *  also the lowest M bits of hv, and N is greater than M.
              *  So we can process expanding with only one item_lock. cool! */
             if ((item_lock = item_trylock(expand_bucket))) {
-                    for (it = old_hashtable[expand_bucket]; NULL != it; it = next) {
+                    it = old_hashtable[expand_bucket];
+                    if (it) pmprefetch(it);
+                    for (; NULL != it; it = next) {
                         next = it->h_next;
+                        if (next) pmprefetch(next);
                         bucket = hash(ITEM_key(it), it->pm->nkey) & hashmask(hashpower);
                         it->h_next = primary_hashtable[bucket];
                         primary_hashtable[bucket] = it;

@@ -126,6 +126,8 @@ uint64_t get_cas_id(void) {
 }
 
 int item_is_flushed(item *it) {
+    pmprefetch(it);
+
     rel_time_t oldest_live = settings.oldest_live;
     uint64_t cas = ITEM_get_cas(it);
     uint64_t oldest_cas = settings.oldest_cas;
@@ -203,6 +205,8 @@ item *do_item_alloc_pull(const size_t ntotal, const unsigned int id) {
         }
         it = slabs_alloc(ntotal, id, &total_bytes, 0);
 
+        if (it) pmprefetch(it);
+
         if (settings.temp_lru)
             total_bytes -= temp_lru_size(id);
 
@@ -243,6 +247,8 @@ item_chunk *do_item_alloc_chunk(item_chunk *ch, const size_t bytes_remain) {
     item_chunk *nch = (item_chunk *) do_item_alloc_pull(size, id);
     if (nch == NULL)
         return NULL;
+
+    pmprefetch(ch->head);
 
     // link in.
     // ITEM_CHUNK[ED] bits need to be protected by the slabs lock.
@@ -1162,10 +1168,12 @@ int lru_pull_tail(const int orig_id, const int cur_lru,
     id |= cur_lru;
     pthread_mutex_lock(&lru_locks[id]);
     search = tails[id];
+    if (search) pmprefetch(search);
     /* We walk up *only* for locked items, and if bottom is expired. */
     for (; tries > 0 && search != NULL; tries--, search=next_it) {
         /* we might relink search mid-loop, so search->prev isn't reliable */
         next_it = search->prev;
+        if (next_it) pmprefetch(next_it);
         if (search->pm->nbytes == 0 && search->pm->nkey == 0 && search->pm->it_flags == 1) {
             /* We are a crawler, ignore it. */
             if (flags & LRU_PULL_CRAWL_BLOCKS) {

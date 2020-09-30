@@ -258,9 +258,14 @@ static int grow_slab_list (const unsigned int id) {
 static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
     slabclass_t *p = &slabclass[id];
     int x;
+    char *rptr = ptr;
     for (x = 0; x < p->perslab; x++) {
-        do_slabs_free(ptr, 0, id);
+        do_slabs_free(ptr, 0, id, rptr);
+#ifdef AGAMOTTO_PSLAB
+        ptr += sizeof(item);
+#else
         ptr += p->size;
+#endif
     }
 }
 
@@ -523,7 +528,7 @@ static void do_slabs_free_chunked(item *it, const size_t size) {
 #ifndef PSLAB
 static
 #endif
-void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
+void do_slabs_free(void *ptr, const size_t size, unsigned int id, void *start_ptr) {
     slabclass_t *p;
     item *it;
     // Agamotto
@@ -540,8 +545,13 @@ void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
 
     // Agamotto
 #ifdef PSLAB
-    // it->pm = calloc(1, sizeof(p->size));
-    it->pm = vslab_to_pslab(ptr);
+    if (start_ptr) {
+        it->pm = vslab_ptr_to_pslab_ptr(ptr, start_ptr, p->size);
+        // it->pm = vslab_to_pslab(ptr);
+    } else if (NULL == it->pm) {
+        fprintf(stderr, "it->pm is null!\n");
+        exit(-1);
+    } 
 #endif
 
     if ((it->pm->it_flags & ITEM_CHUNKED) == 0) {
@@ -555,6 +565,7 @@ void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
             /* no persist since non-linked items can always be reclaimed */
         }
 #endif
+        // it->hash = 0;
         it->pm->slabs_clsid = 0;
         it->prev = 0;
         it->next = p->slots;
@@ -762,7 +773,7 @@ void *slabs_alloc(size_t size, unsigned int id, uint64_t *total_bytes,
 
 void slabs_free(void *ptr, size_t size, unsigned int id) {
     pthread_mutex_lock(&slabs_lock);
-    do_slabs_free(ptr, size, id);
+    do_slabs_free(ptr, size, id, NULL);
     pthread_mutex_unlock(&slabs_lock);
 }
 

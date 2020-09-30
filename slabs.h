@@ -29,7 +29,7 @@ void slabs_prefill_global_from_pmem(void);
 void slabs_update_policy(void);
 int do_slabs_renewslab(const unsigned int id, char *ptr);
 void do_slab_realloc(item *it, unsigned int id);
-void do_slabs_free(void *ptr, const size_t size, unsigned int id);
+void do_slabs_free(void *ptr, const size_t size, unsigned int id, void *root);
 #endif
 
 /**

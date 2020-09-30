@@ -16,6 +16,7 @@
 
 #ifdef AGAMOTTO_PSLAB
 void *vslab_to_pslab(void *ptr);
+void *vslab_ptr_to_pslab_ptr(void *ptr, void *root, size_t sz);
 #endif
 
 

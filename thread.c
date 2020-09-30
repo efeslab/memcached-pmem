@@ -550,6 +550,7 @@ item *item_get(const char *key, const size_t nkey, conn *c, const bool do_update
     item_lock(hv);
     it = do_item_get(key, nkey, hv, c, do_update);
     item_unlock(hv);
+    if (it) pmprefetch(it);
     return it;
 }
 

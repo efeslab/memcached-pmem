@@ -180,6 +180,8 @@ static void crawler_expired_finalize(crawler_module_t *cm) {
  * main thread's values too much. Should rethink again.
  */
 static void crawler_expired_eval(crawler_module_t *cm, item *search, uint32_t hv, int i) {
+    pmprefetch(search);
+
     struct crawler_expired_data *d = (struct crawler_expired_data *) cm->data;
     pthread_mutex_lock(&d->lock);
     crawlerstats_t *s = &d->crawlerstats[i];
@@ -239,6 +241,7 @@ static void crawler_expired_eval(crawler_module_t *cm, item *search, uint32_t hv
 }
 
 static void crawler_metadump_eval(crawler_module_t *cm, item *it, uint32_t hv, int i) {
+    pmprefetch(it);
     //int slab_id = CLEAR_LRU(i);
     char keybuf[KEY_MAX_LENGTH * 3 + 1];
     int is_flushed = item_is_flushed(it);
@@ -386,6 +389,7 @@ static void *item_crawler_thread(void *arg) {
             }
             pthread_mutex_lock(&lru_locks[i]);
             search = do_item_crawl_q((item *)&crawlers[i]);
+            if (search) pmprefetch(search);
             if (search == NULL ||
                 (crawlers[i].pm->remaining && --crawlers[i].pm->remaining < 1)) {
                 if (settings.verbose > 2)
