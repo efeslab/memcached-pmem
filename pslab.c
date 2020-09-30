@@ -325,7 +325,8 @@ int pslab_do_recover() {
             item *it = (item *) ptr;
             if (it->pm->it_flags & ITEM_LINKED) {
                 do_slab_realloc(it, id);
-                do_item_relink(it, hash(ITEM_key(it), it->pm->nkey));
+                // do_item_relink(it, hash(ITEM_key(it), it->pm->nkey));
+                do_item_relink(it, it->hash);
             } else if ((it->pm->it_flags & ITEM_CHUNK) == 0 ||
                     ((item_chunk *)it)->head == NULL) {
                 assert((it->pm->it_flags & ITEM_CHUNKED) == 0);
@@ -404,7 +405,15 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
         return -1;
     }
 
-    
+    // We want this to be smaller/more compact
+    // size_t pitem_sz = pslab_pool->slab_page_size;
+
+    vslab_pool = mmap(NULL, mapped_len, PROT_READ | PROT_WRITE, 
+                      MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+    if (vslab_pool == MAP_FAILED) {
+        perror("mmap failed");
+        return -1;
+    }
 
     length = (sizeof (pslab_pool_t) + sizeof (pslab_pool->slabclass_sizes[0])
         * slabclass_num + 7) & PSLAB_ALIGN_MASK;
@@ -426,8 +435,10 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
     }
 
     pslab_pool->slabclass_num = slabclass_num;
-    for (i = 0; i < slabclass_num; i++)
+    for (i = 0; i < slabclass_num; i++) {
         pslab_pool->slabclass_sizes[i] = slabclass_sizes[i];
+        // printf("size: %u\n", pslab_pool->slabclass_sizes[i]);
+    }
 
     assert(process_started != 0);
     pslab_pool->process_started = (uint64_t) process_started;
@@ -440,15 +451,7 @@ int pslab_create(char *pool_name, uint32_t pool_size, uint32_t slab_page_size,
     pslab_pool->valid = 1;
     pmem_member_persist(pslab_pool, valid);
 
-    // We want this to be smaller/more compact
-    // size_t pitem_sz = pslab_pool->slab_page_size;
-
-    vslab_pool = mmap(NULL, mapped_len, PROT_READ | PROT_WRITE, 
-                      MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-    if (vslab_pool == MAP_FAILED) {
-        perror("mmap failed");
-        return -1;
-    }
+    
 
     *vslab_pool = *pslab_pool;
     vslab_start = PSLAB_FIRST_FRAME(vslab_pool);

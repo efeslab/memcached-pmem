@@ -350,6 +350,7 @@ item *do_item_alloc(char *key, const size_t nkey, const unsigned int flags,
     it->pm->nkey = nkey;
     it->pm->nbytes = nbytes;
     memcpy(ITEM_key(it), key, nkey);
+    it->hash = hash(ITEM_key(it), it->pm->nkey);
     it->pm->exptime = exptime;
     if (settings.inline_ascii_response) {
         memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
@@ -1183,7 +1184,8 @@ int lru_pull_tail(const int orig_id, const int cur_lru,
             tries++;
             continue;
         }
-        uint32_t hv = hash(ITEM_key(search), search->pm->nkey);
+        // uint32_t hv = hash(ITEM_key(search), search->pm->nkey);
+        uint32_t hv = search->hash;
         /* Attempt to hash item lock the "search" item. If locked, no
          * other callers can incr the refcount. Also skip ourselves. */
         if ((hold_lock = item_trylock(hv)) == NULL)

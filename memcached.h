@@ -515,7 +515,7 @@ typedef struct _stritem {
     struct _stritem *prev;
     /* Rest are protected by an item lock */
     struct _stritem *h_next;    /* hash chain next */
-    // uint32_t hash;
+    uint32_t hash;
     pmitem *pm;
 } item;
 
@@ -549,6 +549,7 @@ typedef struct {
     struct _stritem *next;
     struct _stritem *prev;
     struct _stritem *h_next;    /* hash chain next */
+    uint32_t hash;
     pmcrawler *pm;
 } crawler;
 

@@ -239,7 +239,8 @@ static void *assoc_maintenance_thread(void *arg) {
                     for (; NULL != it; it = next) {
                         next = it->h_next;
                         if (next) pmprefetch(next);
-                        bucket = hash(ITEM_key(it), it->pm->nkey) & hashmask(hashpower);
+                        // bucket = hash(ITEM_key(it), it->pm->nkey) & hashmask(hashpower);
+                        bucket = it->hash & hashmask(hashpower);
                         it->h_next = primary_hashtable[bucket];
                         primary_hashtable[bucket] = it;
                     }

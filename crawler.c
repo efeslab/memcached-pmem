@@ -397,7 +397,8 @@ static void *item_crawler_thread(void *arg) {
                 lru_crawler_class_done(i);
                 continue;
             }
-            uint32_t hv = hash(ITEM_key(search), search->pm->nkey);
+            // uint32_t hv = hash(ITEM_key(search), search->pm->nkey);
+            uint32_t hv = search->hash;
             /* Attempt to hash item lock the "search" item. If locked, no
              * other callers can incr the refcount
              */

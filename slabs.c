@@ -565,7 +565,7 @@ void do_slabs_free(void *ptr, const size_t size, unsigned int id, void *start_pt
             /* no persist since non-linked items can always be reclaimed */
         }
 #endif
-        // it->hash = 0;
+        it->hash = 0;
         it->pm->slabs_clsid = 0;
         it->prev = 0;
         it->next = p->slots;
@@ -1029,7 +1029,8 @@ static int slab_rebalance_move(void) {
                  * ITEM_SLABBED, but it's had ITEM_LINKED, it must be active
                  * and have the key written to it already.
                  */
-                hv = hash(ITEM_key(it), it->pm->nkey);
+                // hv = hash(ITEM_key(it), it->pm->nkey);
+                hv = it->hash;
                 if ((hold_lock = item_trylock(hv)) == NULL) {
                     status = MOVE_LOCKED;
                 } else {
