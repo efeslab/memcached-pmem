@@ -3394,7 +3394,7 @@ static void process_stats_conns(ADD_STAT add_stats, void *c) {
     int i;
     char key_str[STAT_KEY_LEN];
     char val_str[STAT_VAL_LEN];
-    char conn_name[MAXPATHLEN + sizeof("unix:")];
+    char conn_name[2 * MAXPATHLEN + sizeof("unix:")];
     int klen = 0, vlen = 0;
 
     assert(add_stats);
