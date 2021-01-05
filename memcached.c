@@ -7674,8 +7674,12 @@ fprintf(stderr, "pslab_size=%ld", pslab_size);
         rlim.rlim_cur = settings.maxconns;
         rlim.rlim_max = settings.maxconns;
         if (setrlimit(RLIMIT_NOFILE, &rlim) != 0) {
-            fprintf(stderr, "failed to set rlimit for open files. Try starting as root or requesting smaller maxconns value.\n");
-            exit(EX_OSERR);
+            fprintf(stderr, "\nfailed to set rlimit for open files. Try starting as root or requesting smaller maxconns value.\n");
+            if (rlim.rlim_max >= settings.maxconns) {
+                fprintf(stderr, "\tSince current (%lu) is >= than requested (%d), continuing...\n", rlim.rlim_max, settings.maxconns);
+            } else {
+                exit(EX_OSERR);
+            }
         }
     }
 
